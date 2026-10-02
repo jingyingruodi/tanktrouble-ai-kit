@@ -44,10 +44,12 @@ WEAPONS = {
     'laser':         {'speed': 180.0, 'lifetime': 0.8,  'fire_delay_ms': 9.8,  'charge_ms': 0,
                       'spread_deg': 0.0, 'ammo': 1,
                       'notes': '实测：180m/s、0.8s、1 发、恒定弹速、无蓄力'},
-    'double_barrel': {'speed': 18.0,  'lifetime': 10.0, 'fire_delay_ms': None, 'charge_ms': 0,
-                      'spread_deg': None, 'ammo': 2,
-                      'notes': '两连发；⚠️ 尚未测成功（2026-10-02 两次尝试分别因回合被自己打结束/'
-                               '拾取未成功而失败，待重测）'},
+    'double_barrel': {'speed': 18.0,  'lifetime': 10.0, 'fire_delay_ms': 9.0,  'charge_ms': 0,
+                      'spread_deg': 0.0, 'ammo': 10,
+                      'notes': '★ 实测（2026-10-02，武器内部状态采样 scripts/measure_charge.py）：'
+                               '一次扳机只出 **1 发**（按住 1.0s 期间 numBullets 10→9 不变、弹丸数恒 1，'
+                               '无第二发）；偏差恒 +0.00°；弹速 18.0 m/s；出膛延迟 6.9~9.8ms；'
+                               '弹仓 10 发；`_weaponCharge` 字段不存在（无蓄力）'},
     'shotgun':       {'speed': 32.0,  'lifetime': 10.0, 'fire_delay_ms': 6.3,  'charge_ms': 0,
                       'spread_deg': 4.0, 'ammo': 20,
                       'notes': '★ 实测：一次扣扳机 20 发（不是 5）；偏差 ±0.2~8.3°（σ≈4.0°）；'
@@ -56,12 +58,15 @@ WEAPONS = {
                        'spread_deg': None, 'ammo': None, 'notes': '追踪弹，需单独建模'},
     'mine':          {'speed': 0.0,   'lifetime': None, 'fire_delay_ms': None, 'charge_ms': 0,
                       'spread_deg': 0.0, 'ammo': 1, 'notes': '不飞行，部署型'},
-    # 加特林：实测弹速明显高于基础弹，且有预热时间与散布
-    'gatling_gun':   {'speed': 27.0,  'lifetime': 10.0, 'fire_delay_ms': None, 'charge_ms': 500,
-                      'spread_deg': 1.6, 'ammo': None,
-                      'notes': '★ 预热（蓄力）≈0.5s：按住 0.1/0.4s 不出弹，0.8s→3 发，1.2s→7 发，'
-                               '2.5s→10 发；实测散布 σ≈1.58°（最大 ±2.84°）；'
-                               '每发弹速 25.4~29.6 m/s 各不相同（各发自身恒定）'},
+    # 加特林：★ 2026-10-02 用"武器内部状态逐帧采样"精确标定（不再靠数弹丸）
+    'gatling_gun':   {'speed': 27.0,  'lifetime': 10.0, 'fire_delay_ms': None, 'charge_ms': 486,
+                      'spread_deg': 1.6, 'ammo': 20, 'fire_interval_ms': 119,
+                      'notes': '★ 精确实测：`_weaponCharge` 从 0 线性升到 1.0（每 ms +0.00206），'
+                               '**首次出弹 = 扣扳机后 486ms**（此时 charge 恰为 1.00）；'
+                               '此后每 **119ms** 一发（实测 486/601/719/835/952/1069/1203/1320ms，'
+                               '即 ≈8.4 发/秒）；弹仓 **20 发**，打空后自动切回基础弹（type→-1）；'
+                               '散布 σ≈1.58°（最大 ±2.84°）；每发弹速 25.4~29.6 m/s 各不相同。'
+                               '⚠️ 在线模式输入粒度 0.5s → 在线要按住 **≥0.6s** 才可能出弹'},
 }
 
 # 默认几何参数（坦克半径按 p2 车体实测 ~2.2m；弹丸半径待精测，先给保守 0.3m）
