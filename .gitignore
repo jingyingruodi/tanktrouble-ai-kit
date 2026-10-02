@@ -1,0 +1,20 @@
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+
+# ---- 大体量实验产物（本地保留，不入库）----
+# 说明：data/ 与 scripts/*.jsonl 是录制/日志（合计约 200MB），
+# 需要完整数据备份时请用网盘/移动盘，或用 git-lfs 单独管理。
+data/
+*.jsonl
+*.jsonl.gz
+monitor_log*.txt
+
+# ---- 诊断草稿与一次性 dump / 截图 ----
+scripts/scratch/
+*.png
+
+# ---- 其它 ----
+.DS_Store
+Thumbs.db
