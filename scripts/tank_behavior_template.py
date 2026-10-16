@@ -455,10 +455,16 @@ class TankBehavior:
   const ang = {ang_deg} * Math.PI / 180;
   const speed = {BULLET_SPEED};
   const vx = Math.cos(ang) * speed, vy = Math.sin(ang) * speed;
+  // ⚠️ 2026-10-16 起官网前端改为 ES module 打包，**不再把 Box2D 暴露成全局**，
+  //    所以不能再用 Box2D.Common.Math.b2Vec2.Make(...)。改为从游戏自己的
+  //    b2Vec2 实例派生（Object.create 原型 + 赋值 x/y）——与库版本无关、不依赖全局。
+  const _v0 = tank.getB2DBody().GetPosition();
+  const _vproto = Object.getPrototypeOf(_v0);
+  const mkVec = (x, y) => {{ const v = Object.create(_vproto); v.x = x; v.y = y; return v; }};
   const proj = {{
     getB2DBody: () => ({{
-      GetPosition: () => Box2D.Common.Math.b2Vec2.Make({px}, {py}),
-      GetLinearVelocity: () => Box2D.Common.Math.b2Vec2.Make(vx, vy)
+      GetPosition: () => mkVec({px}, {py}),
+      GetLinearVelocity: () => mkVec(vx, vy)
     }})
   }};
   const res = B2DUtils.calculateProjectilePath(world, proj, {max_bounces}, {max_dist}, true);
@@ -492,7 +498,8 @@ class TankBehavior:
                                      require_bounce=False, verbose=False,
                                      max_traveled=None, self_radius_slope=0.0,
                                      rotated_hit_check=False,
-                                     exhaustive_fallback=False, muzzle_offset=0.0):
+                                     exhaustive_fallback=False, muzzle_offset=0.0,
+                                     max_bounces=4):
         """权威自动瞄准：用 Box2D RayCast 找能命中目标的开火角。
 
         比 find_aim_angle（tiles 推导）精确，适合对命中率要求高的场景。
@@ -606,7 +613,11 @@ class TankBehavior:
             for deg, _b in candidates:
                 d = await self._raycast_path(px, py, deg, tx, ty, radius,
                                              target_tank_id=target_id,
-                                             origin_offset=muzzle_offset)
+                                             origin_offset=muzzle_offset,
+                                             # 官方路径本身的反弹上限也要放宽，
+                                             # 否则路口径被 MAX_BOUNCES(5) 截断，
+                                             # 后面的 bounces 筛选形同虚设。
+                                             max_bounces=max(MAX_BOUNCES, int(max_bounces) + 1))
                 if not d.get('hit'):
                     continue
                 # 排除反弹回来打自己的角度（弹丸能伤害发射者）。
@@ -619,11 +630,11 @@ class TankBehavior:
                 if path and path_hits_self([(p['x'], p['y']) for p in path], px, py,
                                            radius, self_radius=_sr):
                     continue
-                # 反弹次数：可靠命中区间 ≤4 次；是否要求"至少 1 次反弹"（排除直射）
-                # 由 require_bounce 决定。require_bounce=True 时就是 1~4 次反弹，
-                # =False 时允许直射（与 docstring "先试直线" 一致）。
+                # 反弹次数：可靠命中区间默认 ≤4 次（30 回合验收时的配置）；
+                # 可用 max_bounces 放宽（2026-10-16 实测在线长弹道真实存在
+                # 十几次反弹/180m，收太紧会漏解，见 docs/10 §18）。
                 bounces = d.get('bounces', max(0, len(path) - 1))
-                if bounces > 4:
+                if bounces > max_bounces:
                     continue
                 if require_bounce and bounces < 1:
                     continue  # 要求反弹，排除直射
@@ -680,37 +691,46 @@ class TankBehavior:
             return math.radians(best[1])
         return None
     async def find_aim_angle_at(self, px, py, tx, ty, radius=TANK_RADIUS,
-                                sample_count=360, target_id=None, require_bounce=False):
+                                sample_count=360, target_id=None, require_bounce=False,
+                                max_bounces=2, max_traveled=None):
         """从【任意位置】(px,py) 检查能否命中 (tx,ty)（无需坦克在场）。
 
         用于预判"机动到某个位置后能否开火命中"（机动火控的射击位评估）。
         先试直线，直线不通则扫描全角度找反弹命中角。
         require_bounce=True 时要求至少 1 次墙反弹（排除直射）。
+        max_bounces     允许的最大反弹次数（默认 2 = 历史行为，原为硬编码 <3）。
+        max_traveled    弹丸实际飞行长度上限（米，默认 None = 不限）。
         返回方向角（deg 转弧度）；无解返回 None。
         """
         # 先试直线（允许直射时才考虑）
         straight = aim_angle_straight(px, py, tx, ty)
         if not require_bounce:
             res = await self._raycast_path(px, py, math.degrees(straight), tx, ty, radius,
-                                           target_tank_id=target_id)
+                                           target_tank_id=target_id,
+                                           max_bounces=max(MAX_BOUNCES, int(max_bounces) + 1))
             if res.get('hit'):
                 path = res.get('path', [])
                 if not path_hits_self([(p['x'], p['y']) for p in path], px, py, radius):
                     bounces = res.get('bounces', max(0, len(path) - 1))
-                    if bounces < 3:
+                    travel = res.get('traveled', 0) or 0
+                    if bounces <= max_bounces and (max_traveled is None or travel <= max_traveled):
                         return straight
         # 全角度扫描
         for i in range(sample_count):
             deg = 360.0 * i / sample_count
             res = await self._raycast_path(px, py, deg, tx, ty, radius,
-                                           target_tank_id=target_id)
+                                           target_tank_id=target_id,
+                                           max_bounces=max(MAX_BOUNCES, int(max_bounces) + 1))
             if not res.get('hit'):
                 continue
             path = res.get('path', [])
             if path and path_hits_self([(p['x'], p['y']) for p in path], px, py, radius):
                 continue
             bounces = res.get('bounces', max(0, len(path) - 1))
-            if bounces >= 3:
+            if bounces > max_bounces:
+                continue
+            travel = res.get('traveled', 0) or 0
+            if max_traveled is not None and travel > max_traveled:
                 continue
             if require_bounce and bounces < 1:
                 continue  # 要求反弹，排除直射
@@ -781,7 +801,7 @@ class TankBehavior:
                            lead=False, target_id=None, require_bounce=False,
                            verbose=False, max_traveled=None, muzzle_offset=0.0,
                            self_radius_slope=0.0, rotated_hit_check=False,
-                           exhaustive_fallback=False):
+                           exhaustive_fallback=False, max_bounces=4):
         """自动火控：瞄准能命中 target_pos 的角度并开火。
 
         返回 True 表示已开火（命中角度已找到），False 表示找不到角度。
@@ -832,7 +852,8 @@ class TankBehavior:
                                                     muzzle_offset=muzzle_offset,
                                                     self_radius_slope=self_radius_slope,
                                                     rotated_hit_check=rotated_hit_check,
-                                                    exhaustive_fallback=exhaustive_fallback)
+                                                    exhaustive_fallback=exhaustive_fallback,
+                                                    max_bounces=max_bounces)
         else:
             ang = await self.find_aim_angle(tank_id, aim_pos, radius)
         if ang is None:

@@ -39,6 +39,10 @@ async def main():
     # 越大（实测 3 次反弹偏 >2m → 预测"安全"却回程自伤），且飞行时间越长
     # 移动目标越易躲开。超过此值宁可判无解去换位，不冒险开火。
     MAX_TRAVELED = 45.0
+    # 反弹次数上限（默认 4 = 30 回合验收时的配置）。2026-10-16 在线实测：
+    # 真实长弹道可达 180m / 十几次反弹（docs/10 §18）→ 用
+    # `--max-bounces 25 --max-traveled 180` 做"放宽搜索"对比验收。
+    MAX_BOUNCES_AIM = 4
     # 炮口出膛建模：真实弹丸从炮口（约 2m 前）出膛，而推演默认从车体中心。
     # 多反弹路径下这个起点偏移会连带平移反弹点 → "预测安全、真实自伤/打偏"。
     # 默认 0.0（=v3 验收行为）；用 --muzzle 2.0 开启模型改动做对比验收。
@@ -51,6 +55,10 @@ async def main():
         min_dist = float(args[args.index('--min-dist') + 1])
     if '--muzzle' in args:
         MUZZLE_OFFSET = float(args[args.index('--muzzle') + 1])
+    if '--max-bounces' in args:
+        MAX_BOUNCES_AIM = int(args[args.index('--max-bounces') + 1])
+    if '--max-traveled' in args:
+        MAX_TRAVELED = float(args[args.index('--max-traveled') + 1])
 
     bhv = TankBehavior(port=port)
     await bhv.connect()
@@ -486,6 +494,7 @@ async def main():
             ang = await bhv.find_aim_angle_raycast(attacker, tp, target_id=target,
                                                    require_bounce=True,
                                                    max_traveled=MAX_TRAVELED,
+                                                   max_bounces=MAX_BOUNCES_AIM,
                                                    muzzle_offset=MUZZLE_OFFSET)
             if ang is None:
                 # 无命中角：尝试机动找射击位；都试过则标记"无角"等回合结束（跳过）
@@ -562,6 +571,7 @@ async def main():
             ok = await bhv.aim_and_fire(attacker, tp, raycast=True, lead=True, target_id=target,
                                         require_bounce=True, verbose=True,
                                         max_traveled=MAX_TRAVELED,
+                                        max_bounces=MAX_BOUNCES_AIM,
                                         muzzle_offset=MUZZLE_OFFSET)
             if ok:
                 round_had_angle = True
@@ -598,6 +608,7 @@ async def main():
                     o2 = await bhv.aim_and_fire(attacker, tp2, raycast=True, lead=True, target_id=target,
                                            require_bounce=True, verbose=True,
                                            max_traveled=MAX_TRAVELED,
+                                           max_bounces=MAX_BOUNCES_AIM,
                                            muzzle_offset=MUZZLE_OFFSET)
                     print(f'[strict] 补射 (距离 {d2:.0f}m) ret={o2}', flush=True)
                     if not o2:
