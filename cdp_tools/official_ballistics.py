@@ -37,36 +37,57 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 武器参数表：弹速 m/s、寿命 s、出膛延迟 ms、**蓄力/预热 ms**、散布（度）、弹药
 #   speed/lifetime 为实测或录制标定值；None 表示尚未实测（留待逐武器采集）
 #   charge_ms：扣扳机后需要"预热"多久才开始出弹（加特林最典型，实测见 docs/10 §12）
+#
+# ★ 2026-10-24 新增（权威值，取自游戏常量 `Constants.<WEAPON>`，见 docs/14）：
+#   radius        弹丸碰撞半径（米）——**各武器不同**，用于命中判定
+#   muzzle_offset 炮口偏移（米）——**各武器不同**，弹丸从车体中心沿朝向偏移这么多出膛
+#   来源：BULLET {RADIUS:{px:5,m:0.25}, OFFSET:{px:50,m:2.5}, SPEED:18}
+#         LASER {RADIUS:0, OFFSET:2.5, SPEED:180}
+#         SHOTGUN {RADIUS:0.1, OFFSET:2.45, SPEED:30~35, MAX_LIFETIME:2, AMMO_COUNT:3, BUCKSHOT:20}
+#         HOMING_MISSILE {RADIUS:0.2, OFFSET:2.5, SPEED:18, ACCELERATION:40}
+#         GATLING_GUN {RADIUS:0.1, OFFSET:3.0, SPEED:25~30, BULLET_SPREAD:0.1}
+#         DOUBLE_BARREL {RADIUS:0.25, OFFSET:2.25, SPEED:18, SPACE:0.45}
+#         MINE {RADIUS:0.8, LAUNCH_SPEED:12.5, MIN_SPEED:25}
+#   全局规则：PROJECTILE_BOUNCE_TIMEOUT_COUNT=5（**弹丸最多反弹 5 次即消亡**）、WINDOW=35s
 WEAPONS = {
     'bullet':        {'speed': 18.0,  'lifetime': 10.0, 'fire_delay_ms': None, 'charge_ms': 0,
-                      'spread_deg': 0.0, 'ammo': None,
-                      'notes': '基础弹；maxLifetime=10s 由 v7 录制标定；实测偏差恒 0.00°'},
+                      'spread_deg': 0.0, 'ammo': 5, 'radius': 0.25, 'muzzle_offset': 2.50,
+                      'bounces_max': 5,
+                      'notes': '基础弹；半径 0.25m（运行时 p2 circle 实测一致）、炮口 2.5m、'
+                               '弹仓 5、寿命 10s、反弹上限 5；实测偏差恒 0.00°'},
     'laser':         {'speed': 180.0, 'lifetime': 0.8,  'fire_delay_ms': 9.8,  'charge_ms': 0,
-                      'spread_deg': 0.0, 'ammo': 1,
-                      'notes': '实测：180m/s、0.8s、1 发、恒定弹速、无蓄力'},
+                      'spread_deg': 0.0, 'ammo': 1, 'radius': 0.0, 'muzzle_offset': 2.50,
+                      'notes': '半径 **0**（零宽射线，无碰撞半径）、炮口 2.5m；实测 180m/s、0.8s、1 发、无蓄力'},
     'double_barrel': {'speed': 18.0,  'lifetime': 10.0, 'fire_delay_ms': 9.0,  'charge_ms': 0,
-                      'spread_deg': 0.0, 'ammo': 10,
-                      'notes': '★ 实测（2026-10-02，武器内部状态采样 scripts/measure_charge.py）：'
-                               '一次扳机只出 **1 发**（按住 1.0s 期间 numBullets 10→9 不变、弹丸数恒 1，'
-                               '无第二发）；偏差恒 +0.00°；弹速 18.0 m/s；出膛延迟 6.9~9.8ms；'
-                               '弹仓 10 发；`_weaponCharge` 字段不存在（无蓄力）'},
-    'shotgun':       {'speed': 32.0,  'lifetime': 10.0, 'fire_delay_ms': 6.3,  'charge_ms': 0,
-                      'spread_deg': 4.0, 'ammo': 20,
-                      'notes': '★ 实测：一次扣扳机 20 发（不是 5）；偏差 ±0.2~8.3°（σ≈4.0°）；'
-                               '**每发弹速 30.5~34.9 m/s 各不相同**（各发自身恒定）'},
-    'homing_missile': {'speed': None, 'lifetime': None, 'fire_delay_ms': None, 'charge_ms': 0,
-                       'spread_deg': None, 'ammo': None, 'notes': '追踪弹，需单独建模'},
-    'mine':          {'speed': 0.0,   'lifetime': None, 'fire_delay_ms': None, 'charge_ms': 0,
-                      'spread_deg': 0.0, 'ammo': 1, 'notes': '不飞行，部署型'},
+                      'spread_deg': 0.0, 'ammo': 10, 'radius': 0.25, 'muzzle_offset': 2.25,
+                      'bounces_max': 5, 'space_m': 0.45,
+                      'notes': '★ 实测：一次扳机只出 **1 发**；半径 0.25m、炮口 **2.25m**、弹速 18.0、'
+                               '偏差恒 0.00°、出膛延迟 6.9~9.8ms、弹仓 10、无蓄力'},
+    'shotgun':       {'speed': 32.0,  'lifetime': 2.0,  'fire_delay_ms': 6.3,  'charge_ms': 0,
+                      'spread_deg': 4.0, 'ammo': 60, 'radius': 0.10, 'muzzle_offset': 2.45,
+                      'space_m': 0.40,
+                      'notes': '★ 实测：一次扣扳机 20 发（常数 BUCKSHOT_COUNT=20）；半径 **0.10m**、'
+                               '炮口 2.45m；每发弹速 30.5~34.9（常数 30~35）各不相同；'
+                               '**寿命 2s**（常数 SHOTGUN_MAX_LIFETIME=2 → 射程约 64m，不是 10s！）；'
+                               '弹仓 3 次扳机（AMMO_COUNT=3）；偏差 σ≈4.0°（常数 SPREAD=0.3）'},
+    'homing_missile': {'speed': 18.0, 'lifetime': 10.0, 'fire_delay_ms': None, 'charge_ms': 0,
+                       'spread_deg': 0.0, 'ammo': 1, 'radius': 0.20, 'muzzle_offset': 2.50,
+                       'acceleration': 40.0, 'activation_time': 2.0,
+                       'notes': '追踪弹：半径 **0.20m**、炮口 2.5m、初速 18 + 加速度 40、'
+                                '激活时间 2s、寿命 10s → 需单独建模（会转向）'},
+    'mine':          {'speed': 12.5,  'lifetime': None, 'fire_delay_ms': None, 'charge_ms': 0,
+                      'spread_deg': 0.0, 'ammo': 1, 'radius': 0.80, 'min_speed': 25.0,
+                      'notes': '部署型/抛射：半径 **0.8m**、发射速度 12.5、最低速度 25'},
     # 加特林：★ 2026-10-02 用"武器内部状态逐帧采样"精确标定（不再靠数弹丸）
-    'gatling_gun':   {'speed': 27.0,  'lifetime': 10.0, 'fire_delay_ms': None, 'charge_ms': 486,
+    'gatling_gun':   {'speed': 27.0,  'lifetime': 2.0,  'fire_delay_ms': None, 'charge_ms': 486,
                       'spread_deg': 1.6, 'ammo': 20, 'fire_interval_ms': 119,
-                      'notes': '★ 精确实测：`_weaponCharge` 从 0 线性升到 1.0（每 ms +0.00206），'
-                               '**首次出弹 = 扣扳机后 486ms**（此时 charge 恰为 1.00）；'
-                               '此后每 **119ms** 一发（实测 486/601/719/835/952/1069/1203/1320ms，'
-                               '即 ≈8.4 发/秒）；弹仓 **20 发**，打空后自动切回基础弹（type→-1）；'
-                               '散布 σ≈1.58°（最大 ±2.84°）；每发弹速 25.4~29.6 m/s 各不相同。'
-                               '⚠️ 在线模式输入粒度 0.5s → 在线要按住 **≥0.6s** 才可能出弹'},
+                      'radius': 0.10, 'muzzle_offset': 3.00, 'space_m': 0.40, 'bounces_max': 5,
+                      'notes': '★ 精确实测：蓄力 486ms（`GATLING_GUN_CHARGE_TIME`）、'
+                               '射速 119ms/发、弹仓 20、打空切回基础弹；'
+                               '**寿命 2s（常数 GATLING_GUN_MAX_LIFETIME=2）→ 射程≈54m，不是 10s**；'
+                               '**半径 0.10m（比基础弹小）、炮口 3.0m**；'
+                               '弹速 25.4~29.6（常数 25~30）、散布 σ≈1.58°（常数 BULLET_SPREAD=0.1）。'
+                               '⚠️ 在线输入粒度 0.5s → 在线要按住 **≥0.6s** 才可能出弹'},
 }
 
 # 默认几何参数（坦克半径按 p2 车体实测 ~2.2m；弹丸半径待精测，先给保守 0.3m）
@@ -158,7 +179,9 @@ _BALLISTICS_JS = r"""(() => {
   if (!shooter && !P.origin) return JSON.stringify({err: 'no shooter ' + P.shooter});
   const sx = P.origin ? P.origin.x : shooter.getX();
   const sy = P.origin ? P.origin.y : shooter.getY();
-  const off = P.origin ? 0.0 : U.pxm(window.UIConstants.AIMER_OFFSET);
+  const off = P.origin ? 0.0
+      : (P.muzzleOffset !== undefined && P.muzzleOffset !== null
+          ? P.muzzleOffset : U.pxm(window.UIConstants.AIMER_OFFSET));
 
   function evaluate(theta) {
     const ax = sx + Math.cos(theta) * off, ay = sy + Math.sin(theta) * off;
@@ -235,7 +258,12 @@ class OfficialBallistics:
         return {
             'mode': mode, 'shooter': shooter, 'targets': targets, 'prefer': kw.get('prefer') or [],
             'budget': budget,
-            'tankR': self.tank_r, 'bulletR': self.bullet_r, 'muzzleExit': self.muzzle_exit,
+            # ★ 每武器不同：半径与炮口偏移都取武器表（缺省回退到类默认）
+            #   实测来源：游戏常量 Constants.<WEAPON>.RADIUS / OFFSET（2026-10-24，见 docs/14）
+            'tankR': self.tank_r,
+            'bulletR': (w.get('radius') if w.get('radius') is not None else self.bullet_r),
+            'muzzleOffset': w.get('muzzle_offset'),
+            'muzzleExit': self.muzzle_exit,
             'requireBounce': bool(kw.get('require_bounce')),
             'maxBounces': int(kw.get('max_bounces') or 0),
             'minDist': float(kw.get('min_dist') or 0.0),

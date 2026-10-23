@@ -59,6 +59,17 @@ async def main():
         MAX_BOUNCES_AIM = int(args[args.index('--max-bounces') + 1])
     if '--max-traveled' in args:
         MAX_TRAVELED = float(args[args.index('--max-traveled') + 1])
+    # ★ 2026-10-24 健壮性：全局截止时间 + 回合卡死保护
+    #   背景：实测本脚本会在"单回合长时间不出结果"时一直等下去（20 分钟迷宫版本不变），
+    #   而客户端并没有卡死（Phaser time 正常推进）——是脚本自身的等待/机动循环没有兜底。
+    #   --deadline     整轮验证的总时长预算（秒，默认 900）
+    #   --round-timeout 单回合超过这么多秒仍无"回合状态变化"→ 主动自杀结束该回合
+    DEADLINE = 900.0
+    ROUND_TIMEOUT = 240.0
+    if '--deadline' in args:
+        DEADLINE = float(args[args.index('--deadline') + 1])
+    if '--round-timeout' in args:
+        ROUND_TIMEOUT = float(args[args.index('--round-timeout') + 1])
 
     bhv = TankBehavior(port=port)
     await bhv.connect()
@@ -206,8 +217,28 @@ async def main():
         maneuver_queue = []  # 待尝试的射击位队列
         tried_set = set()     # 已试过的位置
 
+        # ★ 全局截止 + 单回合卡死保护（2026-10-24）
+        run_t0 = asyncio.get_event_loop().time()
+        last_round_change_t = run_t0
+
         while successful_rounds < target_rounds:
             rs = await bhv.get_round_state()
+            now_t = asyncio.get_event_loop().time()
+            if now_t - run_t0 > DEADLINE:
+                print(f'[strict] ⏱ 达到全局截止 {DEADLINE:.0f}s：成功 {successful_rounds}/{target_rounds} 回合 → 结束',
+                      flush=True)
+                break
+            if rs != last_round:
+                last_round_change_t = now_t
+            elif now_t - last_round_change_t > ROUND_TIMEOUT:
+                print(f'[strict] ⏱ 回合已 {now_t - last_round_change_t:.0f}s 无状态变化 → 主动自杀结束本回合',
+                      flush=True)
+                try:
+                    await bhv.suicide_by_bounce(attacker, timeout=20.0)
+                except Exception as e:
+                    print(f'[strict]   自杀结束失败: {e}', flush=True)
+                last_round_change_t = asyncio.get_event_loop().time()
+                continue
             # 回合状态变化检测
             if rs != last_round:
                 if last_round == 'in round' and round_base_kills is not None:

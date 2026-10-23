@@ -393,10 +393,25 @@ async def main():
             break
         await asyncio.sleep(1)
     print('[online] 回合状态=%s' % rnd, flush=True)
-    before = (await ctl.tanks())[pids[0]]
+    # ★ 健壮性：等坦克真正进坦克表（新服务端下房间刚建好时可能短暂缺席，
+    #   直接取 [pids[0]] 会 KeyError: '22838087'）
+    before = None
+    for _ in range(20):
+        t = await ctl.tanks()
+        if pids[0] in t:
+            before = t[pids[0]]
+            break
+        await asyncio.sleep(0.5)
+    if before is None:
+        print('[online] ⚠️ 坦克 %s 迟迟未上场，跳过控制校验' % pids[0], flush=True)
+        out = {'ok': False, 'port': port, 'state': info['state'], 'mode': info['mode'],
+               'gameId': info.get('gameId'), 'pids': pids, 'moved_m': 0.0, 'err': 'tank not spawned'}
+        print(json.dumps(out, ensure_ascii=False), flush=True)
+        await cdp.close()
+        return 1
     await ctl.set_input(pids[0], fwd=True, hold=0.8)
     await asyncio.sleep(0.5)
-    after = (await ctl.tanks())[pids[0]]
+    after = (await ctl.tanks()).get(pids[0]) or before
     moved = ((after['x'] - before['x']) ** 2 + (after['y'] - before['y']) ** 2) ** 0.5
     print('[online] 控制校验: (%.1f,%.1f) → (%.1f,%.1f)  位移 %.2fm'
           % (before['x'], before['y'], after['x'], after['y'], moved), flush=True)
