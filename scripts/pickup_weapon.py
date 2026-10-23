@@ -198,6 +198,8 @@ async def main():
     ap.add_argument('--spawn', action='store_true',
                     help='用游戏自己的 spawnCrate 造出目标箱子再拾取（研究用）')
     ap.add_argument('--tank', default=None, help='指定坦克 id（默认取方向键角色）')
+    ap.add_argument('--clear-others', action='store_true',
+                    help='★2026-10-24：拾取前销毁其它箱子（只留目标箱，保证拿到指定武器）')
     args = ap.parse_args()
 
     port = resolve_port(args.port)
@@ -231,6 +233,19 @@ async def main():
         return 1
     print('[pickup] 目标箱子 %s type=%d @(%.1f,%.1f)m'
           % (cr['id'], args.type, cr['x'], cr['y']), flush=True)
+
+    if args.clear_others:
+        # 销毁除目标箱以外的所有箱子（避免路上顺手捡到别的武器）
+        js = ("""(() => { const M = GameManager.getGameController().roundController.model;
+          const keep = %s; const destroyed = [];
+          for (const id of Object.keys(M.getCollectibles())) {
+            if (id === keep) continue;
+            try { M.destroyCollectible({getCollectibleId: function () { return id; }}, true);
+                  destroyed.push(id); } catch (e) {} }
+          return JSON.stringify(destroyed); })()""" % json.dumps(cr['id']))
+        gone = await ctl.cdp.eval(js)
+        print('[pickup] 清理其它箱子: %s' % gone, flush=True)
+        await asyncio.sleep(0.4)
 
     # 导航：用 TankBehavior.navigate_to（逐航点 replan + 撞墙滑行；比
     # pickup_mine 那套"只转向+前进"的简易导航更抗迷宫）
