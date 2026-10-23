@@ -8,7 +8,7 @@ TankTrouble 一次性自杀脚本（墙反弹自伤）- FINAL
   rot=PI/2  -> 朝右 (+x)
 
 转向速率：约 1.35 rad / 0.3s（按住 setLeft/setRight）
-  （转向速度约 4.5 rad/s）
+  （转向速度 5.0 rad/s，2026-10-24 实测）
 
 用法：python suicide_script.py [port] [tank_index]
 """

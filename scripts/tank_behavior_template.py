@@ -77,7 +77,11 @@ from gameutils import (
     is_in_safe_area,         # 坐标是否在安全区内
     extract_storm_zones,     # 从地形摘要里筛出毒圈数据
     TILE_M,                  # 每格米数（10m）
-    TURN_RATE,               # 转向速度 rad/s
+    TURN_RATE,               # 转向速度 rad/s（5.0，2026-10-24 实测）
+)
+from tank_constants import (
+    TANK_FORWARD_SPEED,      # 前进速度 15.95 m/s（★2026-10-24 游戏内实测；旧文档误写 7.5）
+    TANK_BACK_SPEED,         # 后退速度 12.8 m/s
 )
 from ballistics import (
     BULLET_SPEED,            # 炮弹速度 18 m/s
@@ -1068,7 +1072,8 @@ class TankBehavior:
                 await self.stop(tank_id)
                 return True
             if await self.turn_to(tank_id, tx, ty):
-                await self.move_forward(tank_id, min(d / 7.5, 0.3))
+                # 前进时长 = 距离 / 实测速度 15.95 m/s（旧值 7.5 会超时 2 倍）
+                await self.move_forward(tank_id, min(d / TANK_FORWARD_SPEED, 0.3))
             await asyncio.sleep(0.1)
         return False
 

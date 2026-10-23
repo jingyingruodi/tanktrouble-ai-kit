@@ -18,7 +18,10 @@ import json
 import math
 
 # 坦克转向速度（rad/s），用于估算转向时长
-TURN_RATE = 4.5
+# ★ 2026-10-24 游戏内实测修正：4.5 → 5.0
+#   实测右转 4.80 / 左转 5.17 rad/s（帧定时量化误差），官方常量 TANK.ROTATION_SPEED=5.0；
+#   前进 15.95 m/s、后退 12.8 m/s（实测物理体线速度恒定、无加速段），见 cdp_tools/tank_constants.py
+TURN_RATE = 5.0
 
 
 def wrap_pi(a):

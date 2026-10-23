@@ -73,7 +73,7 @@ async def main():
     ap = argparse.ArgumentParser(description='官方瞄准线 vs 我们的 Box2D 预测')
     ap.add_argument('port', nargs='?', default='auto')
     ap.add_argument('--turns', type=int, default=6)
-    ap.add_argument('--turn-sec', type=float, default=0.35, help='每次右转时长（≈4.5rad/s）')
+    ap.add_argument('--turn-sec', type=float, default=0.35, help='每次右转时长（≈5.0rad/s，2026-10-24 实测）')
     args = ap.parse_args()
 
     port = resolve_port(args.port)

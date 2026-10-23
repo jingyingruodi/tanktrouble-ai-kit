@@ -171,7 +171,7 @@ async def measure(ctl, pid, action, hold=0.7, settle=0.35, retries=3):
       超过坦克物理上限的位移按 `suspect` 标记并重试；
     * 坦克不在场（死亡）时先等重生。
     """
-    TANK_SPEED = 7.5          # 项目实测坦克前进速度 m/s
+    TANK_SPEED = 15.95        # 坦克前进速度 m/s（★2026-10-24 游戏内实测；旧值 7.5 有误）
     for attempt in range(retries):
         b0 = await wait_tank(ctl, pid)
         if not b0:

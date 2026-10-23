@@ -20,7 +20,7 @@ from tankctl import TankCtl
 from gameutils import wrap_pi
 
 TILE = 10.0  # 每格米数
-SPEED = 7.5  # 前进速度估算 m/s
+SPEED = 15.95  # 前进速度 m/s（★2026-10-24 实测；旧值 7.5 有误，官方 TANK.FORWARD_SPEED=15.95）
 ARRIVE = 1.0  # 米：离目标多近算到达
 CRAWL = 0.35  # 米：拾取范围
 
@@ -50,7 +50,7 @@ class Navigator:
         if abs(diff) < 0.04:
             return True
         # 比例控制：dur = diff / 转向速率，但给个最小脉冲保证物理生效
-        dur = max(abs(diff) / 4.5, 0.06)
+        dur = max(abs(diff) / 5.0, 0.06)  # ★2026-10-24 实测转向 5.0 rad/s（旧值 4.5）
         dur = min(dur, 0.4)
         if diff > 0:
             await self.ctl.turn_right(dur, self.tid)
