@@ -77,8 +77,16 @@ WEAPONS = {
                        'notes': '追踪弹：半径 **0.20m**、炮口 2.5m、初速 18 + 加速度 40、'
                                 '激活时间 2s、寿命 10s → 需单独建模（会转向）'},
     'mine':          {'speed': 12.5,  'lifetime': None, 'fire_delay_ms': None, 'charge_ms': 0,
-                      'spread_deg': 0.0, 'ammo': 1, 'radius': 0.80, 'min_speed': 25.0,
-                      'notes': '部署型/抛射：半径 **0.8m**、发射速度 12.5、最低速度 25'},
+                      'spread_deg': 0.0, 'ammo': 3, 'radius': 0.80, 'min_speed': 25.0,
+                      'trigger_on': 'leave', 'activation_delay': 0.5, 'detonation_delay': 0.4,
+                      'shrapnel_count': 30, 'shrapnel_radius': 0.10, 'shrapnel_speed': 33.7,
+                      'notes': '★ 部署型"离开即引爆"地雷（2026-10-24 游戏内实测）：'
+                               '布设后 **492ms `_activated`=True**（=MINE_ACTIVATION_DELAY 0.5s）；'
+                               '坦克进入触发区 → `_tripped`=True、`_trippingTankIds`=[该坦克]；'
+                               '**离开触发区即引爆** → **30 片弹片（半径 0.10m、速度≈33.7 m/s）**，'
+                               '实测同时可见 23 片；引爆后陷阱从 `M.traps` 移除。'
+                               '地雷本体半径 **0.8m**（陷阱 p2 circle 实测）、发射速度 12.5、最低速度 25；'
+                               '弹仓 3（MINE_AMMO_COUNT）；引爆延迟 0.4s（MINE_DETONATION_DELAY）'},
     # 加特林：★ 2026-10-02 用"武器内部状态逐帧采样"精确标定（不再靠数弹丸）
     'gatling_gun':   {'speed': 27.0,  'lifetime': 2.0,  'fire_delay_ms': None, 'charge_ms': 486,
                       'spread_deg': 1.6, 'ammo': 20, 'fire_interval_ms': 119,
