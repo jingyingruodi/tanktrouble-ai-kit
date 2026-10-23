@@ -58,10 +58,11 @@ WEAPONS = {
     'laser':         {'speed': 180.0, 'lifetime': 0.8,  'fire_delay_ms': 9.8,  'charge_ms': 0,
                       'spread_deg': 0.0, 'ammo': 1, 'radius': 0.0, 'muzzle_offset': 2.50,
                       'notes': '半径 **0**（零宽射线，无碰撞半径）、炮口 2.5m；实测 180m/s、0.8s、1 发、无蓄力'},
-    'double_barrel': {'speed': 18.0,  'lifetime': 10.0, 'fire_delay_ms': 9.0,  'charge_ms': 0,
+    'double_barrel': {'speed': 18.0,  'lifetime': 6.0,  'fire_delay_ms': 9.0,  'charge_ms': 0,
                       'spread_deg': 0.0, 'ammo': 10, 'radius': 0.25, 'muzzle_offset': 2.25,
                       'bounces_max': 5, 'space_m': 0.45,
                       'notes': '★ 实测：一次扳机只出 **1 发**；半径 0.25m、炮口 **2.25m**、弹速 18.0、'
+                               '**寿命 6s**（官方 DOUBLE_BARREL_MAX_LIFETIME=6.0，运行时实测 lifetime 恒为 6）、'
                                '偏差恒 0.00°、出膛延迟 6.9~9.8ms、弹仓 10、无蓄力'},
     'shotgun':       {'speed': 32.0,  'lifetime': 2.0,  'fire_delay_ms': 6.3,  'charge_ms': 0,
                       'spread_deg': 4.0, 'ammo': 60, 'radius': 0.10, 'muzzle_offset': 2.45,
