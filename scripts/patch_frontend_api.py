@@ -60,6 +60,10 @@ SIGNATURES = """
     UIAimerGraphics: c => c && c.prototype && typeof c.prototype.addPoint === 'function',
     B2DUtils:        c => c && typeof c.calculateProjectilePath === 'function',
     UIUtils:         c => c && typeof c.mpx === 'function',
+    // ★ 2026-10-23 补：UIConstants（像素单位常量，AIMER_OFFSET=50px=2.5m 等）。
+    //   official_ballistics / official_aim / aimer_* 都读 window.UIConstants.AIMER_OFFSET，
+    //   漏导出会让弹药/瞄准线模块直接崩（"Cannot read properties of undefined"）。
+    UIConstants:     c => c && c.AIMER_OFFSET !== undefined && c.AIMER_WIDTH !== undefined,
     PremiumManager:  c => c && typeof c.isPremiumPresent === 'function'
   };
   // 命名空间对象签名

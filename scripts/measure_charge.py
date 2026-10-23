@@ -63,9 +63,13 @@ SAMPLER = r"""(() => {
       rec.charge = (w._weaponCharge !== undefined) ? w._weaponCharge : null;
       rec.trigger = (w._triggerPulled !== undefined) ? w._triggerPulled : null;
       rec.newBurst = (w._newBurst !== undefined) ? w._newBurst : null;
-      rec.numBullets = (w._numBullets !== undefined) ? w._numBullets : null;
+      // ★ 2026-10-23 复核：RELEASE-2026-10-21-01 起弹药数字段改名
+      //   `_numBullets` → `_bulletCount`（基础弹/加特林都是），保留旧名回退。
+      rec.numBullets = (w._bulletCount !== undefined) ? w._bulletCount
+                      : ((w._numBullets !== undefined) ? w._numBullets : null);
       rec.bulletsFired = (w._bulletsFired !== undefined) ? w._bulletsFired : null;
       rec.sinceFire = (w._timeSinceFire !== undefined) ? w._timeSinceFire : null;
+      rec.bulletCount = (w._bulletCount !== undefined) ? w._bulletCount : null;
       rec.fired = (w._fired !== undefined) ? w._fired : null;
       rec.proj = Object.keys(M.getProjectiles()).length;
     } catch (e) { rec.err = String(e); }
