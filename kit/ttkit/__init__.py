@@ -1147,18 +1147,24 @@ class Kit:
         if snap:
             # v8：必须返回"转向网格角上、且该角 raycast 命中"的项；
             # 否则调用方会拿到 hit=False 的假解（v7 实测踩坑）。
-            wins = await self.reachable_windows(
-                pid, target_id, center_deg=it['window_center_deg'],
-                span_deg=min(float(span_deg) * 2.0, 60.0),
-                step_deg=min(float(step_deg), 0.25), profile=profile)
-            for w in wins:
-                item = w.get('item')
-                if w.get('feasible') and item is not None and item.get('hit'):
-                    item['window'] = w['width_deg']
-                    item['window_center_deg'] = it['window_center_deg']
-                    item['snapped_deg'] = w['grid_deg']
-                    item['snap_offset_deg'] = None
-                    return item
+            # v9：若在给定 span 内找不到，自动扩大搜索半径再试一次（实测转向
+            #      可能偏出 ±10°，此时原窗口仍有可行网格角，只是不在附近）。
+            for _span in (min(float(span_deg) * 2.0, 60.0), 120.0, 360.0):
+                wins = await self.reachable_windows(
+                    pid, target_id, center_deg=it['window_center_deg'],
+                    span_deg=_span, step_deg=min(float(step_deg), 0.25),
+                    profile=profile)
+                for w in wins:
+                    item = w.get('item')
+                    if w.get('feasible') and item is not None and item.get('hit'):
+                        item['window'] = w['width_deg']
+                        item['window_center_deg'] = it['window_center_deg']
+                        item['snapped_deg'] = w['grid_deg']
+                        item['snap_offset_deg'] = None
+                        item['search_span_deg'] = _span
+                        return item
+                if _span >= 360.0:
+                    break
             return None
         return it
 
