@@ -1,14 +1,24 @@
 """
-ttkit —— TankTrouble 角色信息获取 / 操作封装包（黑盒 API **v3**）
+ttkit —— TankTrouble 角色信息获取 / 操作封装包（黑盒 API **v4**）
 ================================================================
 把"读取游戏状态"和"操作角色"封装成稳定、带文档的方法。所有控制都走游戏自己的
 `setInputState`（与人类按键等价，在线/本地都安全）。
+
+v4 相比 v3 的关键改进（来自第四轮黑盒测试的反馈）：
+  * `turn_to_angle()` 的 `actual_deg/err_deg` 改为**停稳后重新读取的最终朝向**
+    （v3 返回"过程最优值"，实测可差 9~14°）；另给 `final_err_deg`；
+  * `scan_adaptive()` 默认**合并所有步长的候选**（粗扫的长解不再掩盖近角短解）；
+  * `is_good_candidate()` 增加策略参数（默认 `bounces<=6`；长弹道要求 `self_risk>=20m`）；
+  * `quality` 纳入 `self_risk`（离自己越近越不可靠）；
+  * 文档补充：官方推演是**零宽射线**（`b2dworld.RayCast`，不含 0.25m 弹丸半径），
+    掠射反弹点必然有偏差；`calculateFiringPath` 起点是车体中心沿 -Y 偏 2m，
+    而实弹出生点是 2.5m（`BULLET.OFFSET`）。霰弹（weapon=2）的散射**未建模**。
 
 v3 相比 v2 的关键改进（来自第三轮黑盒测试的反馈）：
   * **自伤风险检测** `self_risk`：预测路径在**第一次反弹之后**离自己过近时报警
     （官方零宽射线与实际弹丸有偏差，实测曾"预测命中对手、实际偏 16.5m 打死自己"）；
   * **`aim_and_fire` 的鲁棒检查改为可选**（v2 默认 ±1.5° 在窄窗口图上几乎永不开火）；
-  * `turn_to_angle()` 改为**自适应脉冲 + 过冲回退**，返回最佳可达角（避免容差附近极限环振荡）；
+  * `turn_to_angle()` 改为**自适应脉冲 + 过冲回退**；
   * `scan_adaptive()`：粗扫→细扫（30→10→5→2°），命中窗口只有 1~3° 时也能找到解；
   * `scan()` 每项新增 `path` / `self_risk`（米）/ `self_risk_ok`；
   * 新增 `reset_maze_cache()`（迷宫每回合重生成，避免旧回合墙缓存污染寻路预筛）、
@@ -289,11 +299,15 @@ class Kit:
         await self._require(pid)
         return await self.bhv.turn_to_rot(pid, float(rot), tol=tol)
 
-    async def turn_to_angle(self, pid, world_angle_rad, tol_deg=1.8, max_pulses=40):
+    async def turn_to_angle(self, pid, world_angle_rad, tol_deg=1.8, max_pulses=40,
+                            settle=True):
         """自适应闭环转向到**世界方向角**（弧度）。
 
-        接近目标时自动缩小脉冲；检测到过冲就回退并接受最佳可达角（避免极限环振荡）。
-        返回 ``{'ok','actual_deg','err_deg','best_err_deg'}``。
+        接近目标时自动缩小脉冲；检测到过冲就回退（避免极限环振荡）。
+        **v4：`actual_deg` / `err_deg` 返回"停稳后重新读取"的最终朝向**
+        （v3 返回的是过程最优值，实测可差 9~14°）。`best_err_deg` 仍给过程最优值。
+
+        返回 ``{'ok','actual_deg','err_deg','best_err_deg','final_err_deg'}``。
         """
         await self._require(pid)
         target = float(world_angle_rad) + math.pi / 2
@@ -327,11 +341,27 @@ class Kit:
             await self.ctl.set_input(pid, hold=0.05)
         except Exception:
             pass
-        if best is None:
-            return {'ok': False, 'actual_deg': None, 'err_deg': None, 'best_err_deg': None}
-        ok = best[0] <= tol + math.radians(1.0)
-        return {'ok': bool(ok), 'actual_deg': math.degrees(best[1] - math.pi / 2),
-                'err_deg': -math.degrees(best[0]), 'best_err_deg': math.degrees(best[0])}
+        final_err = None
+        final_rot = None
+        if settle:
+            try:
+                await self.bhv.wait_still(pid, max_wait=0.5)
+            except Exception:
+                await asyncio.sleep(0.1)
+            final_rot = await self.rotation(pid)
+            if final_rot is not None:
+                final_err = (target - final_rot + math.pi) % (2 * math.pi) - math.pi
+        use = final_rot if final_rot is not None else (best[1] if best else None)
+        ue = final_err if final_err is not None else (-best[0] if best else None)
+        if use is None:
+            return {'ok': False, 'actual_deg': None, 'err_deg': None,
+                    'best_err_deg': None, 'final_err_deg': None}
+        ok = abs(ue) <= tol + math.radians(1.0)
+        return {'ok': bool(ok),
+                'actual_deg': math.degrees(use - math.pi / 2),
+                'err_deg': -math.degrees(ue),
+                'best_err_deg': math.degrees(best[0]) if best else None,
+                'final_err_deg': math.degrees(ue)}
 
     async def navigate_to(self, pid, target_xy, arrival=1.5, timeout=None):
         await self._require(pid)
@@ -409,6 +439,8 @@ class Kit:
         self_pid = str(raw_hit) == str(pid)
         path = d.get('path') or []
         risk = self._self_risk_of_path(pos, path)
+        quality = (float(traveled) + 30.0 * float(nb)
+                   + max(0.0, 20.0 - min(float(risk), 20.0)) * 5.0)
         return {'angle_rad': float(angle_rad),
                 'path': path,
                 'bounces': nb,
@@ -419,6 +451,7 @@ class Kit:
                 'self_hit_harmless': bool(hit and self_pid and nb == 0),
                 'self_risk': float(risk),
                 'self_risk_ok': bool(risk >= SELF_RISK_RADIUS),
+                'quality': float(quality),
                 'reachable': reach}
 
     async def scan(self, pid, step_deg=30, max_traveled=None, robust_deg=None):
@@ -456,35 +489,65 @@ class Kit:
                         ok = False
                         break
                 item['robust'] = ok
-            item['quality'] = float(item['traveled']) + 30.0 * float(item['bounces'])
+            item['quality'] = (float(item['traveled']) + 30.0 * float(item['bounces'])
+                               + max(0.0, 20.0 - min(float(item['self_risk']), 20.0)) * 5.0)
             out.append(item)
         return out
 
-    def is_good_candidate(self, item, pid, target_id=None):
-        """候选是否"可安全开火"：命中对手、不自伤、无自伤风险。"""
+    def is_good_candidate(self, item, pid, target_id=None, max_bounces=6,
+                          max_traveled=None, min_self_risk=None):
+        """候选是否"可安全开火"的默认策略（参数可覆盖）：
+
+        * 命中对手（非自己）且 `self_hit == False`；
+        * `bounces <= max_bounces`（默认 6：多反弹路径实测偏差可达 16m）；
+        * `traveled <= max_traveled`（默认用射程）；
+        * 自伤风险：默认 `self_risk >= max(4, 20 if bounces>=5 or traveled>=100 else 4)`。
+        """
         if not item or not item.get('hit_pid'):
             return False
         if str(item['hit_pid']) == str(pid):
             return False
         if target_id is not None and str(item['hit_pid']) != str(target_id):
             return False
-        return bool(not item.get('self_hit') and item.get('self_risk_ok', True))
+        if item.get('self_hit'):
+            return False
+        nb = int(item.get('bounces') or 0)
+        if nb > int(max_bounces):
+            return False
+        if max_traveled is not None and float(item.get('traveled') or 0) > float(max_traveled):
+            return False
+        risk = float(item.get('self_risk') or 0.0)
+        if min_self_risk is None:
+            need = 20.0 if (nb >= 5 or float(item.get('traveled') or 0) >= 100.0) else 4.0
+        else:
+            need = float(min_self_risk)
+        return bool(risk >= need)
 
     async def scan_adaptive(self, pid, target_id=None, steps=(30, 10, 5, 2),
-                            robust_deg=None):
-        """粗→细自适应扫描：依次用 steps 扫描，一旦找到安全候选就返回。
+                            robust_deg=None, merge=True, stop_early=False):
+        """粗→细自适应扫描（v4：默认**合并所有步长**的候选，避免粗扫长解掩盖近角短解）。
 
-        返回 ``(candidates, used_steps)``；候选已按 quality 升序。
+        返回 ``(candidates, used_steps)``；候选按 quality 升序、按角度去重。
+        ``stop_early=True`` 时恢复 v3 行为（粗步长一有候选就返回）。
         """
         used = []
+        merged = {}
         for st in steps:
             used.append(int(st))
             res = await self.scan(pid, step_deg=st, robust_deg=robust_deg)
             cands = [r for r in res if self.is_good_candidate(r, pid, target_id)]
-            if cands:
+            if cands and stop_early:
                 cands.sort(key=lambda r: r['quality'])
                 return cands, used
-        return [], used
+            for c in cands:
+                key = round(math.degrees(c['angle_rad']), 2)
+                prev = merged.get(key)
+                if prev is None or c['quality'] < prev['quality']:
+                    merged[key] = c
+            if stop_early and not merge and cands:
+                break
+        out = sorted(merged.values(), key=lambda r: r['quality'])
+        return out, used
 
     async def find_aim(self, pid, target_xy, target_id=None, require_bounce=False,
                        max_traveled=None, max_bounces=None):
@@ -497,32 +560,77 @@ class Kit:
             pid, tuple(target_xy), target_id=target_id, require_bounce=require_bounce,
             max_traveled=float(max_traveled), max_bounces=cap, muzzle_offset=off)
 
+    async def fine_aim(self, pid, target_id, center_rad, span_deg=10.0, step_deg=1.0,
+                       max_bounces=6):
+        """在 ``center_rad`` ±span_deg 内按 step_deg 细搜，返回"命中目标且安全"的最佳项。
+
+        用于转向后微调：命中窗口常只有 1~3°，而转向分辨率约 1~5°。
+        优先离 center 最近，其次 quality 最小。找不到返回 None。
+        """
+        await self._require(pid)
+        pos = await self.bhv.get_position(pid)
+        if pos is None:
+            return None
+        off = float(MUZZLE_OFFSET.get(int(await self.weapon(pid)), 2.50))
+        rng = await self.bullet_range(pid)
+        n = max(1, int(float(span_deg) / float(step_deg)))
+        best = None
+        for k in range(-n, n + 1):
+            ang = float(center_rad) + math.radians(k * float(step_deg))
+            d = await self.bhv._raycast_path(
+                pos[0], pos[1], math.degrees(ang), 0.0, 0.0,
+                max_bounces=MAX_PATH_BOUNCES, max_dist=rng * 1.5,
+                target_tank_id=None, origin_offset=off)
+            it = self._mk_ray(pid, ang, d, rng, pos)
+            if not self.is_good_candidate(it, pid, target_id, max_bounces=max_bounces):
+                continue
+            key = (abs(k), it['quality'])
+            if best is None or key < best[0]:
+                best = (key, it)
+        return best[1] if best else None
+
     async def aim_and_fire(self, pid, target_xy, target_id=None, fire_sec=0.6,
-                           tol_deg=1.8, robust_deg=None, self_risk_ok=True, max_attempts=3):
+                           tol_deg=1.8, robust_deg=None, self_risk_ok=True,
+                           max_attempts=3, fine_search=True, fine_span_deg=10.0):
         """转向 + 在实际朝向复核弹道（含自伤风险检查）→ 通过才开火。
 
-        v3 默认**不做** ±robust_deg 邻域检查（窄窗口图上会永不开火），
-        但默认要求 `self_risk_ok`（反弹后路径不贴近自己）。
+        v4 在复核失败时增加**就近微调**：在当前实际朝向上细搜 ±fine_span_deg，
+        找到"命中目标且安全"的最近角度 → 小角度转过去 → 再复核 → 开火。
+        （命中窗口 1~3° 而转向分辨率 1~5°，只靠一次转向很难正好对准。）
 
-        返回 ``{'fired','reason','angle_deg','verify','attempt'}``。
+        返回 ``{'fired','reason','angle_deg','verify','attempt','fine'}``。
         """
         await self._require(pid)
         for attempt in range(1, int(max_attempts) + 1):
             ang = await self.find_aim(pid, target_xy, target_id=target_id)
             if ang is None:
                 return {'fired': False, 'reason': 'no_aim', 'angle_deg': None,
-                        'verify': None, 'attempt': attempt}
+                        'verify': None, 'attempt': attempt, 'fine': False}
             await self.turn_to_angle(pid, ang, tol_deg=tol_deg)
             cur = await self.rotation(pid)
             if cur is None:
                 return {'fired': False, 'reason': 'no_pose', 'angle_deg': None,
-                        'verify': None, 'attempt': attempt}
+                        'verify': None, 'attempt': attempt, 'fine': False}
             actual = cur - math.pi / 2
             v = await self.raycast(pid, actual)
             ok = bool(v and v.get('hit') and str(v.get('hit_pid')) == str(target_id)
                       and not v.get('self_hit'))
             if ok and self_risk_ok and not v.get('self_risk_ok', True):
                 ok = False
+            fine_used = False
+            if not ok and fine_search:
+                best = await self.fine_aim(pid, target_id, actual, span_deg=fine_span_deg)
+                if best is not None:
+                    await self.turn_to_angle(pid, best['angle_rad'], tol_deg=tol_deg)
+                    cur = await self.rotation(pid)
+                    if cur is not None:
+                        actual = cur - math.pi / 2
+                        v = await self.raycast(pid, actual)
+                        ok = bool(v and v.get('hit') and str(v.get('hit_pid')) == str(target_id)
+                                  and not v.get('self_hit'))
+                        if ok and self_risk_ok and not v.get('self_risk_ok', True):
+                            ok = False
+                        fine_used = True
             if ok and robust_deg:
                 for delta in (float(robust_deg), -float(robust_deg)):
                     s = await self.raycast(pid, actual + math.radians(delta))
@@ -534,6 +642,6 @@ class Kit:
                 continue
             await self.fire(pid, fire_sec)
             return {'fired': True, 'reason': None, 'angle_deg': math.degrees(actual),
-                    'verify': v, 'attempt': attempt}
+                    'verify': v, 'attempt': attempt, 'fine': fine_used}
         return {'fired': False, 'reason': 'verify_failed', 'angle_deg': None,
-                'verify': None, 'attempt': int(max_attempts)}
+                'verify': None, 'attempt': int(max_attempts), 'fine': False}
