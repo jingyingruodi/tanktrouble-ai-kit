@@ -193,7 +193,15 @@ class Kit:
         return await self.bhv.get_round_state()
 
     async def position(self, pid):
-        return await self.bhv.get_position(pid)
+        for _ in range(2):
+            try:
+                p = await self.bhv.get_position(pid)
+                if p is not None:
+                    return p
+            except Exception:
+                pass
+            await asyncio.sleep(0.08)
+        return None
 
     async def rotation(self, pid):
         """**原始累积 rot**（弧度）。"""
@@ -467,7 +475,12 @@ class Kit:
 
     async def stop(self, pid):
         await self._require(pid)
-        await self.ctl.set_input(pid, hold=0.12)
+        for _ in range(2):
+            try:
+                await self.ctl.set_input(pid, hold=0.12)
+                break
+            except Exception:
+                await asyncio.sleep(0.1)
         try:
             await self.bhv.wait_still(pid, max_wait=0.8)
         except Exception:
@@ -893,7 +906,7 @@ class Kit:
 
     async def scan_adaptive(self, pid, target_id=None, steps=(30, 10, 5, 2),
                             robust_deg=None, profiles=('strict', 'relaxed', 'loose'),
-                            merge=True, stop_early=False):
+                            merge=True, stop_early=False, steps_limit=None):
         """粗→细 + **多档策略**扫描。
 
         依次对每个 profile 扫描全部步长并合并候选；一旦某档找到候选就返回该档
@@ -904,6 +917,8 @@ class Kit:
         for prof in profiles:
             merged = {}
             for st in steps:
+                if steps_limit is not None and len([u for u in used if u == int(st)]) >= 0 and int(st) > int(steps_limit) and merged:
+                    break
                 if int(st) not in used:
                     used.append(int(st))
                 res = await self.scan(pid, step_deg=st, robust_deg=robust_deg)
@@ -940,7 +955,8 @@ class Kit:
 
     async def reachable_windows(self, pid, target_id=None, center_deg=0.0,
                                 span_deg=360.0, step_deg=0.5,
-                                quantum_deg=TURN_QUANTUM_DEG, profile=None):
+                                quantum_deg=TURN_QUANTUM_DEG, profile=None,
+                                sort='distance'):
         """扫描命中窗口，**并判断每个窗口里是否有"转向可达角"**（v8 核心）。
 
         转向量子约 4.775°：若窗口宽度 < 量子且不含网格点，则**物理上打不中**。
@@ -988,11 +1004,16 @@ class Kit:
                 groups.append(curg)
                 curg = [nxt]
         groups.append(curg)
-        # 跨 0/360 合并
-        if len(groups) > 1 and (groups[0][0][0] - groups[-1][-1][0]) <= float(step_deg) * 1.5 % 360.0:
-            if (360.0 - groups[-1][-1][0]) + groups[0][0][0] <= float(step_deg) * 1.5:
-                merged = [[h[0] - 360.0 for h in groups[-1]] + groups[0]]
-                groups = merged + groups[1:-1]
+        # 跨 0/360 合并（v10 修复：必须保持 [deg, tier] 结构；v9 之前会把 float 混进列表）
+        try:
+            if len(groups) > 1:
+                first_deg = groups[0][0][0]
+                last_deg = groups[-1][-1][0]
+                if (360.0 - last_deg) + first_deg <= float(step_deg) * 1.5:
+                    merged = [[(d - 360.0), t] for d, t in groups[-1]] + groups[0]
+                    groups = [merged] + groups[1:-1]
+        except Exception:
+            pass
         q = float(quantum_deg)
         out = []
         for g in groups:
@@ -1023,13 +1044,20 @@ class Kit:
                         'width_deg': width,
                         'grid_deg': (_wrap_pi(math.radians(best[1])) * 180.0 / math.pi
                                      if best else None),
-                        'tier': tier, 'item': item,
+                        'tier': tier,
+                        'quality': (item.get('quality') if item else None),
+                        'bounces': (item.get('bounces') if item else None),
+                        'traveled': (item.get('traveled') if item else None),
+                        'item': item,
                         'feasible': bool(item and item.get('hit'))})
         def key(w):
             if w['grid_deg'] is None:
-                return (2, 1e9, 0)
+                return (2, 1e9, 1e9, 0)
             dx = abs(((w['grid_deg'] - cur_world + 180.0) % 360.0) - 180.0)
-            return (0 if w['feasible'] else 1, dx, -w['width_deg'])
+            q = w['quality'] if w['quality'] is not None else 1e9
+            if sort == 'quality':
+                return (0 if w['feasible'] else 1, q, dx, -w['width_deg'])
+            return (0 if w['feasible'] else 1, dx, q, -w['width_deg'])
         out.sort(key=key)
         return out
 
@@ -1067,7 +1095,7 @@ class Kit:
                        profile=None, max_bounces=None, max_traveled=None,
                        min_self_risk=None, prefer='window_center',
                        ref_bounces=None, ref_traveled=None, same_family=True,
-                       snap=True):
+                       snap=True, max_span_deg=120.0, expand_step_deg=1.0):
         """在 ``center_rad`` ±span_deg 内细采样，找**命中窗口**并返回窗口中心角。
 
         v5：不再返回"离中心最近的角"（窗口 1~3°、瞄准误差 1~2°，瞄边缘≈瞄外面），
@@ -1149,11 +1177,17 @@ class Kit:
             # 否则调用方会拿到 hit=False 的假解（v7 实测踩坑）。
             # v9：若在给定 span 内找不到，自动扩大搜索半径再试一次（实测转向
             #      可能偏出 ±10°，此时原窗口仍有可行网格角，只是不在附近）。
-            for _span in (min(float(span_deg) * 2.0, 60.0), 120.0, 360.0):
+            spans = [min(float(span_deg) * 2.0, 60.0)]
+            for extra in (120.0, float(max_span_deg) if max_span_deg else 0.0):
+                if extra > spans[-1] + 1e-9:
+                    spans.append(extra)
+            for _span in spans:
+                _step = (min(float(step_deg), 0.25) if _span <= 60.0
+                         else float(expand_step_deg))
                 wins = await self.reachable_windows(
                     pid, target_id, center_deg=it['window_center_deg'],
-                    span_deg=_span, step_deg=min(float(step_deg), 0.25),
-                    profile=profile)
+                    span_deg=_span, step_deg=_step, profile=profile,
+                    sort='quality')
                 for w in wins:
                     item = w.get('item')
                     if w.get('feasible') and item is not None and item.get('hit'):
@@ -1163,8 +1197,6 @@ class Kit:
                         item['snap_offset_deg'] = None
                         item['search_span_deg'] = _span
                         return item
-                if _span >= 360.0:
-                    break
             return None
         return it
 
