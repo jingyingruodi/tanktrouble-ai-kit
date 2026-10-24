@@ -1,8 +1,14 @@
 """
-ttkit —— TankTrouble 角色信息获取 / 操作封装包（黑盒 API **v4**）
+ttkit —— TankTrouble 角色信息获取 / 操作封装包（黑盒 API **v6**）
 ================================================================
 把"读取游戏状态"和"操作角色"封装成稳定、带文档的方法。所有控制都走游戏自己的
 `setInputState`（与人类按键等价，在线/本地都安全）。
+
+v6（第五/六轮黑盒反馈）：`ammo()` 增加 `remaining = left - fired`（left 是弹匣容量！）；
+新增 `scores()/kills_of()/round_id()` 用于**比分归因**；`scan()` 增加 `include_targets`
+（补"正对目标"的直线角，固定网格会漏掉 1~3° 的窗口）；`fine_aim(profile=None)` 自动
+多档并用 `same_family` 防止换成更长路径解；`rotation()` 瞬时 None 重试；
+`navigate_to_ex()` 返回 `from/moved`；`turn_precise()` 多轮补偿 + `outlier` 标记。
 
 v4 相比 v3 的关键改进（来自第四轮黑盒测试的反馈）：
   * `turn_to_angle()` 的 `actual_deg/err_deg` 改为**停稳后重新读取的最终朝向**
@@ -193,7 +199,11 @@ class Kit:
                 return raw
         except Exception:
             pass
-        return await self.bhv.get_rotation(pid)
+        r = await self.bhv.get_rotation(pid)
+        if r is None:
+            await asyncio.sleep(0.1)
+            r = await self.bhv.get_rotation(pid)
+        return r
 
     async def rotation_norm(self, pid):
         r = await self.rotation(pid)
@@ -267,11 +277,80 @@ class Kit:
                 return None
             for e in raw:
                 if e.get('playerId') is not None and str(e['playerId']) == str(pid):
-                    return {'left': e.get('bulletCount'), 'fired': e.get('bulletsFired'),
+                    left = e.get('bulletCount')
+                    fired = e.get('bulletsFired')
+                    remain = None
+                    try:
+                        if left is not None and fired is not None:
+                            remain = max(0, int(left) - int(fired))
+                    except Exception:
+                        remain = None
+                    return {'left': left, 'fired': fired, 'remaining': remain,
                             'weapon': await self.weapon(pid)}
             return None
         except Exception:
             return None
+
+    async def round_id(self):
+        """当前回合 id（``gc.getRoundId()``）；跨回合切换/计分归因比状态字符串可靠。"""
+        js = """(() => { try { const gc = GameManager.getGameController();
+          if (!gc) return 'null';
+          return JSON.stringify(gc.getRoundId ? gc.getRoundId() : null); }
+          catch (e) { return 'null'; } })()"""
+        try:
+            raw = await self.ctl.cdp.eval(js)
+            return json.loads(raw) if raw else None
+        except Exception:
+            return None
+
+    async def scores(self):
+        """比分/击杀（``gc.getScores()`` 原始结构）；用于**开火后归因**。
+
+        本地局一击必杀后回合会立刻重置，`alive()/destroyed_pids()` 来不及观察，
+        用比分增量（击杀 +1）判断命中才是最可靠的。
+        """
+        js = """(() => { try { const gc = GameManager.getGameController();
+          if (!gc || !gc.getScores) return 'null';
+          return JSON.stringify(gc.getScores()); } catch (e) { return 'null'; } })()"""
+        try:
+            raw = await self.ctl.cdp.eval(js)
+            return json.loads(raw) if raw else None
+        except Exception:
+            return None
+
+    async def kills_of(self, pid):
+        """某 pid 的计分：``{'kills': int, 'victories': int}`` 或 None。
+
+        游戏 ``getScores()`` 结构为 ``{scoreId: {id, playerId, type, value}}``，
+        type=0 击杀、type=1 胜局（实测 9→13→17 与命中数一致）。
+        """
+        sc = await self.scores()
+        if not sc:
+            return None
+        kills = 0
+        wins = 0
+        found = False
+        entries = sc.values() if isinstance(sc, dict) else sc
+        try:
+            for e in entries:
+                if not isinstance(e, dict):
+                    continue
+                if e.get('playerId') is None or str(e['playerId']) != str(pid):
+                    continue
+                found = True
+                t = e.get('type')
+                v = e.get('value')
+                try:
+                    v = int(v)
+                except Exception:
+                    continue
+                if int(t) == 0:
+                    kills = v
+                elif int(t) == 1:
+                    wins = v
+        except Exception:
+            return None
+        return {'kills': kills, 'victories': wins} if found else None
 
     async def bullets_in_flight(self, pid=None):
         """场上弹丸（可按发射者过滤）；可用于"一发一结算"归因。"""
@@ -415,7 +494,7 @@ class Kit:
                 pass
 
     async def turn_precise(self, pid, world_angle_rad, tol_deg=0.8, lead_deg=1.2,
-                           max_rounds=4, timeout=6.0):
+                           max_rounds=6, timeout=6.0):
         """**连续按住 + 高频读 rot + 提前释放 + 过冲补偿**的精准转向。
 
         比脉冲法精度高得多（实测残差 mean 0.8~1.2°、max <4°；脉冲法 3~6°、max 12°+）。
@@ -457,6 +536,7 @@ class Kit:
                 'err_deg': -math.degrees(err),
                 'best_err_deg': abs(math.degrees(err)),
                 'final_err_deg': math.degrees(err),
+                'outlier': bool(abs(math.degrees(err)) > 3.0),
                 'precise': True}
 
     async def turn_to_angle(self, pid, world_angle_rad, tol_deg=1.2, max_pulses=40,
@@ -551,13 +631,17 @@ class Kit:
         """带信息的寻路：返回 ``{arrived, pos, dist, elapsed}``。"""
         import time as _t
         t0 = _t.time()
+        start = await self.position(pid)
         arrived = await self.navigate_to(pid, target_xy, arrival=arrival, timeout=timeout)
         pos = await self.position(pid)
         dist = None
         if pos is not None:
             dist = math.hypot(pos[0] - target_xy[0], pos[1] - target_xy[1])
-        return {'arrived': bool(arrived), 'pos': pos, 'dist': dist,
-                'elapsed': round(_t.time() - t0, 2)}
+        moved = None
+        if start is not None and pos is not None:
+            moved = math.hypot(pos[0] - start[0], pos[1] - start[1])
+        return {'arrived': bool(arrived), 'pos': pos, 'from': start, 'dist': dist,
+                'moved': moved, 'elapsed': round(_t.time() - t0, 2)}
 
     async def navigate_segment(self, pid, target_xy, max_seconds=3.0, arrival=1.5):
         """有界单段寻路：最多走 max_seconds 秒（超时取消并松键），返回结果字典。"""
@@ -633,7 +717,8 @@ class Kit:
                 'quality': float(quality),
                 'reachable': reach}
 
-    async def scan(self, pid, step_deg=30, max_traveled=None, robust_deg=None):
+    async def scan(self, pid, step_deg=30, max_traveled=None, robust_deg=None,
+                   include_targets=True):
         """静默扫描 360°：每项含 ``hit_pid/self_hit/bounces/traveled/robust/quality/
         path/self_risk/self_risk_ok``。
 
@@ -671,6 +756,31 @@ class Kit:
             item['quality'] = (float(item['traveled']) + 30.0 * float(item['bounces'])
                                + max(0.0, 20.0 - min(float(item['self_risk']), 20.0)) * 5.0)
             out.append(item)
+        # ★ v6：固定步长网格不含"正对目标"的直线角（命中窗口 1~3° 时会整窗漏掉）
+        if include_targets:
+            seen = {round(math.degrees(it['angle_rad']), 2) for it in out}
+            for tp in await self._all_pids():
+                if str(tp) == str(pid):
+                    continue
+                tpos = await self.bhv.get_position(tp)
+                if tpos is None:
+                    continue
+                base = math.degrees(math.atan2(tpos[1] - pos[1], tpos[0] - pos[0]))
+                for delta in (0.0, 1.5, -1.5):
+                    deg = base + delta
+                    key = round(deg, 2)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    d = await self.bhv._raycast_path(
+                        pos[0], pos[1], float(deg), 0.0, 0.0,
+                        max_bounces=MAX_PATH_BOUNCES, max_dist=float(max_traveled) * 1.5,
+                        target_tank_id=None, origin_offset=off)
+                    item = self._mk_ray(pid, math.radians(deg), d, float(max_traveled), pos)
+                    item['robust'] = None
+                    item['quality'] = (float(item['traveled']) + 30.0 * float(item['bounces'])
+                                       + max(0.0, 20.0 - min(float(item['self_risk']), 20.0)) * 5.0)
+                    out.append(item)
         return out
 
     # 开火策略分级：strict（默认，保守）/ relaxed（多反弹仍可搏）/ loose（更宽）
@@ -777,8 +887,9 @@ class Kit:
             max_traveled=float(max_traveled), max_bounces=cap, muzzle_offset=off)
 
     async def fine_aim(self, pid, target_id, center_rad, span_deg=10.0, step_deg=0.25,
-                       profile='strict', max_bounces=None, max_traveled=None,
-                       min_self_risk=None, prefer='window_center'):
+                       profile=None, max_bounces=None, max_traveled=None,
+                       min_self_risk=None, prefer='window_center',
+                       ref_bounces=None, ref_traveled=None, same_family=True):
         """在 ``center_rad`` ±span_deg 内细采样，找**命中窗口**并返回窗口中心角。
 
         v5：不再返回"离中心最近的角"（窗口 1~3°、瞄准误差 1~2°，瞄边缘≈瞄外面），
@@ -791,6 +902,7 @@ class Kit:
         pos = await self.bhv.get_position(pid)
         if pos is None:
             return None
+        profs = ([profile] if profile else ['strict', 'relaxed', 'loose'])
         off = self._muzzle(await self.weapon(pid))
         rng = await self.bullet_range(pid)
         n = max(1, int(round(float(span_deg) / float(step_deg))))
@@ -802,11 +914,24 @@ class Kit:
                 max_bounces=MAX_PATH_BOUNCES, max_dist=rng * 1.5,
                 target_tank_id=None, origin_offset=off)
             it = self._mk_ray(pid, ang, d, rng, pos)
-            if not self.is_good_candidate(it, pid, target_id, profile=profile,
+            ok_prof = None
+            for prof in profs:
+                if self.is_good_candidate(it, pid, target_id, profile=prof,
                                           max_bounces=max_bounces,
                                           max_traveled=max_traveled,
                                           min_self_risk=min_self_risk):
+                    ok_prof = prof
+                    break
+            if ok_prof is None:
                 continue
+            it['tier'] = ok_prof
+            # 同族约束：避免"转向没对准 → fine_aim 换成更长的另一条解"
+            if same_family and ref_bounces is not None:
+                if int(it['bounces']) > int(ref_bounces) + 1:
+                    continue
+            if same_family and ref_traveled is not None:
+                if float(it['traveled']) > float(ref_traveled) * 1.25 + 10.0:
+                    continue
             hits.append((k, it))
         if not hits:
             return None
