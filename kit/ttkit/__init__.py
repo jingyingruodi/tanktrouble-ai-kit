@@ -100,6 +100,8 @@ class Kit:
         self.gu = _gu
         self._roles_cache = {}
         self._roles_ts = 0.0
+        # 自伤阈值缩放系数 (bounces, traveled)；None = 关闭几何放大
+        self.risk_scale = (0.6, 0.03)
 
     # ────────────────────────── 连接 ──────────────────────────
     async def connect(self, port=None):
@@ -528,8 +530,10 @@ class Kit:
         cur_world = _wrap_pi(cur - math.pi / 2)
         delta = _wrap_pi(float(world_angle_rad) - cur_world)
         snapped = cur_world + round(delta / q) * q
-        return {'angle_rad': snapped, 'angle_deg': math.degrees(snapped),
-                'offset_deg': math.degrees(_wrap_pi(snapped - float(world_angle_rad)))}
+        snapped_n = cur_world + round(delta / q) * q
+        snapped_n = _wrap_pi(snapped_n)
+        return {'angle_rad': snapped_n, 'angle_deg': math.degrees(snapped_n),
+                'offset_deg': math.degrees(_wrap_pi(snapped_n - float(world_angle_rad)))}
 
     async def turn_precise(self, pid, world_angle_rad, tol_deg=0.8, lead_deg=1.2,
                            max_rounds=6, timeout=6.0):
@@ -862,18 +866,25 @@ class Kit:
             return False
         nb = int(item.get('bounces') or 0)
         tv = float(item.get('traveled') or 0)
+        scale = None if min_self_risk is not None else 'default'
         return bool(nb <= int(pol['max_bounces']) and tv <= float(pol['max_traveled'])
-                    and self.candidate_tier(item, pid, target_id, profile) is not None)
+                    and self.candidate_tier(item, pid, target_id, profile,
+                                            risk_scale=scale) is not None)
 
-    def candidate_tier(self, item, pid, target_id=None, profile='strict'):
+    def candidate_tier(self, item, pid, target_id=None, profile='strict', risk_scale='default'):
         """判定候选所属档位并检查自伤风险 → 返回档位字符串或 None。"""
         pol = dict(self.PROFILES.get(profile, self.PROFILES['strict']))
         nb = int(item.get('bounces') or 0)
         tv = float(item.get('traveled') or 0)
         risk = float(item.get('self_risk') or 0.0)
         need = float(pol['risk_long']) if (nb >= int(pol['long_bounces']) or tv >= float(pol['long_traveled'])) else float(pol['risk_short'])
-        # v7: 多反弹/长行程的自伤阈值随几何放大（实测 3 反弹 97m risk=5.2 仍被自己跳弹打死）
-        need = max(need, 4.0 + 0.6 * nb + 0.03 * tv)
+        # v7: 多反弹/长行程的自伤阈值随几何放大（可配置/可关闭）
+        scale = self.risk_scale if risk_scale == 'default' else risk_scale
+        if scale is not None:
+            try:
+                need = max(need, 4.0 + float(scale[0]) * nb + float(scale[1]) * tv)
+            except Exception:
+                pass
         if risk < need:
             return None
         if nb > int(pol['max_bounces']) or tv > float(pol['max_traveled']):
@@ -926,6 +937,101 @@ class Kit:
         return await self.bhv.find_aim_angle_raycast(
             pid, tuple(target_xy), target_id=target_id, require_bounce=require_bounce,
             max_traveled=float(max_traveled), max_bounces=cap, muzzle_offset=off)
+
+    async def reachable_windows(self, pid, target_id=None, center_deg=0.0,
+                                span_deg=360.0, step_deg=0.5,
+                                quantum_deg=TURN_QUANTUM_DEG, profile=None):
+        """扫描命中窗口，**并判断每个窗口里是否有"转向可达角"**（v8 核心）。
+
+        转向量子约 4.775°：若窗口宽度 < 量子且不含网格点，则**物理上打不中**。
+        返回按"可达网格角离当前朝向最近"排序的窗口列表，每项::
+
+            {'window_start_deg','window_end_deg','width_deg','grid_deg',
+             'tier','item'|None,'feasible': bool}
+
+        ``item`` 是网格角上的 ``raycast`` 结果（保证命中，或 None 不可达）。
+        """
+        await self._require(pid)
+        pos = await self.bhv.get_position(pid)
+        if pos is None:
+            return []
+        cur = await self.rotation(pid)
+        cur_world = math.degrees(_wrap_pi(cur - math.pi / 2)) if cur is not None else 0.0
+        off = self._muzzle(await self.weapon(pid))
+        rng = await self.bullet_range(pid)
+        profs = ([profile] if profile else ['strict', 'relaxed', 'loose'])
+        n = max(1, int(round(float(span_deg) / float(step_deg))))
+        hits = []
+        for i in range(n):
+            deg = (float(center_deg) - float(span_deg) / 2.0 + i * float(step_deg)) % 360.0
+            d = await self.bhv._raycast_path(
+                pos[0], pos[1], deg, 0.0, 0.0,
+                max_bounces=MAX_PATH_BOUNCES, max_dist=rng * 1.5,
+                target_tank_id=None, origin_offset=off)
+            it = self._mk_ray(pid, math.radians(deg), d, rng, pos)
+            tier = None
+            for prof in profs:
+                if self.is_good_candidate(it, pid, target_id, profile=prof):
+                    tier = prof
+                    break
+            if tier:
+                hits.append([deg, tier])
+        if not hits:
+            return []
+        hits.sort(key=lambda h: h[0])
+        groups = []
+        curg = [hits[0]]
+        for prev, nxt in zip(hits, hits[1:]):
+            if nxt[0] - prev[0] <= float(step_deg) * 1.5:
+                curg.append(nxt)
+            else:
+                groups.append(curg)
+                curg = [nxt]
+        groups.append(curg)
+        # 跨 0/360 合并
+        if len(groups) > 1 and (groups[0][0][0] - groups[-1][-1][0]) <= float(step_deg) * 1.5 % 360.0:
+            if (360.0 - groups[-1][-1][0]) + groups[0][0][0] <= float(step_deg) * 1.5:
+                merged = [[h[0] - 360.0 for h in groups[-1]] + groups[0]]
+                groups = merged + groups[1:-1]
+        q = float(quantum_deg)
+        out = []
+        for g in groups:
+            lo = g[0][0]
+            hi = g[-1][0]
+            width = (hi - lo) + float(step_deg)
+            # 从当前朝向出发的可达角网格： cur_world + k*q
+            k0 = math.ceil((lo - cur_world) / q - 1e-9)
+            k1 = math.floor((hi - cur_world) / q + 1e-9)
+            best = None
+            center = (lo + hi) / 2.0
+            for k in range(int(k0), int(k1) + 1):
+                gd = cur_world + k * q
+                dist = abs(gd - center)
+                if best is None or dist < best[0]:
+                    best = (dist, gd)
+            tier = g[0][1]
+            item = None
+            if best is not None:
+                gd = best[1] % 360.0
+                d = await self.bhv._raycast_path(
+                    pos[0], pos[1], gd, 0.0, 0.0,
+                    max_bounces=MAX_PATH_BOUNCES, max_dist=rng * 1.5,
+                    target_tank_id=None, origin_offset=off)
+                item = self._mk_ray(pid, math.radians(gd), d, rng, pos)
+                item['tier'] = tier
+            out.append({'window_start_deg': lo % 360.0, 'window_end_deg': hi % 360.0,
+                        'width_deg': width,
+                        'grid_deg': (_wrap_pi(math.radians(best[1])) * 180.0 / math.pi
+                                     if best else None),
+                        'tier': tier, 'item': item,
+                        'feasible': bool(item and item.get('hit'))})
+        def key(w):
+            if w['grid_deg'] is None:
+                return (2, 1e9, 0)
+            dx = abs(((w['grid_deg'] - cur_world + 180.0) % 360.0) - 180.0)
+            return (0 if w['feasible'] else 1, dx, -w['width_deg'])
+        out.sort(key=key)
+        return out
 
     async def scan_region(self, pid, center_deg, span_deg=20.0, step_deg=0.5,
                           target_id=None, profile=None):
@@ -1039,19 +1145,21 @@ class Kit:
         it['window'] = float((max(ks) - min(ks) + 1) * float(step_deg))
         it['window_center_deg'] = math.degrees(ang)
         if snap:
-            sn = await self.snap_angle(pid, ang)
-            it['snapped_deg'] = sn['angle_deg']
-            it['snap_offset_deg'] = sn['offset_deg']
-            d2 = await self.bhv._raycast_path(
-                pos[0], pos[1], sn['angle_deg'], 0.0, 0.0,
-                max_bounces=MAX_PATH_BOUNCES, max_dist=rng * 1.5,
-                target_tank_id=None, origin_offset=off)
-            it2 = self._mk_ray(pid, sn['angle_rad'], d2, rng, pos)
-            it2['window'] = it['window']
-            it2['snapped_deg'] = sn['angle_deg']
-            it2['snap_offset_deg'] = sn['offset_deg']
-            it2['window_center_deg'] = it['window_center_deg']
-            return it2
+            # v8：必须返回"转向网格角上、且该角 raycast 命中"的项；
+            # 否则调用方会拿到 hit=False 的假解（v7 实测踩坑）。
+            wins = await self.reachable_windows(
+                pid, target_id, center_deg=it['window_center_deg'],
+                span_deg=min(float(span_deg) * 2.0, 60.0),
+                step_deg=min(float(step_deg), 0.25), profile=profile)
+            for w in wins:
+                item = w.get('item')
+                if w.get('feasible') and item is not None and item.get('hit'):
+                    item['window'] = w['width_deg']
+                    item['window_center_deg'] = it['window_center_deg']
+                    item['snapped_deg'] = w['grid_deg']
+                    item['snap_offset_deg'] = None
+                    return item
+            return None
         return it
 
     async def aim_and_fire(self, pid, target_xy, target_id=None, fire_sec=0.6,
