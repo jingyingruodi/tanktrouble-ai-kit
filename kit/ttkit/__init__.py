@@ -274,12 +274,17 @@ class Kit:
         nb = int(d.get('bounces') or 0)
         traveled = float(d.get('traveled') or 0)
         reach = traveled <= float(max_traveled)      # ★ 射程 = 弹速 × 寿命，超出即不可达
+        self_pid = str(pid) == str(d.get('hitTank'))
+        # ★ 自伤标签机制（deadlyToOwner）：弹丸**第一次撞墙/盾后才变成"可伤发射者"**；
+        #   0 次反弹就"命中自己"的路径现实中会穿透（无害），不算自伤。
+        deadly_self = bool(self_pid and nb >= 1)
         return {'angle_rad': float(world_angle_rad),
                 'path': d.get('path') or [],
                 'bounces': nb,
                 'traveled': traveled,
                 'hit_pid': d.get('hitTank') if reach else None,
-                'self_hit': reach and str(d.get('hitTank')) == str(pid),
+                'self_hit': bool(reach and deadly_self),
+                'self_hit_harmless': bool(reach and self_pid and nb == 0),
                 'reachable': reach}
 
     async def scan(self, pid, step_deg=30, max_traveled=180.0, max_bounces=None):
@@ -312,9 +317,12 @@ class Kit:
             nb = int(d.get('bounces') or 0)
             traveled = float(d.get('traveled') or 0)
             reach = traveled <= float(max_traveled)   # ★ 射程 = 弹速 × 寿命
+            self_pid = str(pid) == str(d.get('hitTank'))
+            deadly_self = bool(self_pid and nb >= 1)  # ★ 自伤标签：一次反弹后才致命
             out.append({'angle_rad': math.radians(deg),
                         'hit_pid': d.get('hitTank') if reach else None,
-                        'self_hit': reach and str(d.get('hitTank')) == str(pid),
+                        'self_hit': bool(reach and deadly_self),
+                        'self_hit_harmless': bool(reach and self_pid and nb == 0),
                         'bounces': nb,
                         'traveled': traveled,
                         'reachable': reach})

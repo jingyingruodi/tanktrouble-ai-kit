@@ -68,6 +68,13 @@ asyncio.run(main())
 > **反弹次数没有实际上限**（客户端 `timeoutWindow=35` 本意是秒却与毫秒时间戳相减，
 > 有效窗口只有 35ms，反弹计数随清随空，5 次上限几乎不触发）。
 > 因此 `scan()` 只需保证 `traveled ≤ 弹速×寿命`，不要自己加"反弹次数"过滤。
+>
+> ★ **自伤标签（deadlyToOwner）**：弹丸**第一次撞墙/撞盾后才变成"可伤发射者"**
+> （源码 `PreSolve`：MAZE|PROJECTILE → `makeDeadlyToOwner()`；TANK|PROJECTILE 只有
+> `deadlyToOwner` 为真或对方不是发射者才致命，否则穿透）。
+> 游戏内实测：`deadlyToOwner` 在第一次反弹瞬间由 False 翻 True。
+> 所以 `scan()` 的 `self_hit` **只在 `bounces ≥ 1` 时才算**（0 反弹命中自己会穿透、无害，
+> 记为 `self_hit_harmless=True`）。
 
 ## 4. 任务：写 `agent_ai.py`
 
