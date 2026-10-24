@@ -72,6 +72,11 @@ MUZZLE_OFFSET = {-1: 2.50, 0: 2.50, 1: 2.25, 2: 2.45, 3: 2.50, 4: 1.45, 5: 3.00}
 # 射程（米）= 弹速 × 寿命
 WEAPON_RANGE = {-1: 180.0, 0: 144.0, 1: 108.0, 2: 64.0, 3: 180.0, 4: 0.0, 5: 54.0}
 
+def _wrap_pi(a):
+    """把角度归一化到 [-π, π)。"""
+    return (a + math.pi) % (2 * math.pi) - math.pi
+
+
 MAX_PATH_BOUNCES = 100
 # 反弹后路径离自己多近算"自伤风险"（米）。实测预测偏差可达 16m，取 4m 保守。
 SELF_RISK_RADIUS = 4.0
@@ -196,8 +201,84 @@ class Kit:
             return None
         return (r + math.pi) % (2 * math.pi) - math.pi
 
+    async def destroyed_pids(self):
+        """本回合已被摧毁的 pid 列表（回合重置后可能为空）。"""
+        try:
+            return list(await self.bhv.get_destroyed())
+        except Exception:
+            return []
+
     async def alive(self, pid):
-        return await self.bhv.is_alive(pid)
+        """是否存活（v5：先查 destroyed 列表，再查 position，短暂 None 会重试一次）。"""
+        try:
+            if str(pid) in [str(d) for d in await self.destroyed_pids()]:
+                return False
+        except Exception:
+            pass
+        try:
+            if await self.bhv.is_alive(pid):
+                return True
+        except Exception:
+            pass
+        pos = await self.position(pid)
+        if pos is not None:
+            return True
+        await asyncio.sleep(0.2)
+        return (await self.position(pid)) is not None
+
+    async def position_confirm(self, pid, retries=3, delay=0.2):
+        """读取位置并确认（短暂 None 重试）；仍为 None 返回 None。"""
+        for _ in range(max(1, int(retries))):
+            pos = await self.position(pid)
+            if pos is not None:
+                return pos
+            await asyncio.sleep(float(delay))
+        return None
+
+    async def ammo(self, pid):
+        """本回合弹药：``{'left': int, 'fired': int, 'weapon': int}`` 或 None。
+
+        默认武器每回合 5 发；打完后再 fire() **静默无效**（游戏不报错）。
+        """
+        js = """(() => {
+          try {
+            const gc = GameManager.getGameController();
+            if (!gc) return 'null';
+            const rs = gc.roundController.model.getRoundState();
+            const d = rs && rs.data ? rs.data : null;
+            if (!d || !d.weaponStates) return 'null';
+            const out = [];
+            for (let i = 0; i < d.weaponStates.length; i++) {
+              const st = d.weaponStates[i];
+              let fields = st ? (st.fieldsJSON || st.fields || st) : null;
+              if (typeof fields === 'string') { try { fields = JSON.parse(fields); } catch (e) {} }
+              out.push({playerId: (st && st.playerId !== undefined) ? st.playerId
+                          : (fields && fields.playerId !== undefined ? fields.playerId : null),
+                        bulletCount: fields ? fields._bulletCount : null,
+                        bulletsFired: fields ? fields._bulletsFired : null,
+                        type: fields ? fields._type : null});
+            }
+            return JSON.stringify(out);
+          } catch (e) { return 'null'; }
+        })()"""
+        try:
+            raw = json.loads(await self.ctl.cdp.eval(js))
+            if not raw:
+                return None
+            for e in raw:
+                if e.get('playerId') is not None and str(e['playerId']) == str(pid):
+                    return {'left': e.get('bulletCount'), 'fired': e.get('bulletsFired'),
+                            'weapon': await self.weapon(pid)}
+            return None
+        except Exception:
+            return None
+
+    async def bullets_in_flight(self, pid=None):
+        """场上弹丸（可按发射者过滤）；可用于"一发一结算"归因。"""
+        ps = await self.projectiles()
+        if pid is None:
+            return ps
+        return [p for p in ps if str(p.get('playerId')) == str(pid)]
 
     async def opponents(self, my_pid):
         return [p for p in await self._all_pids() if str(p) != str(my_pid)]
@@ -221,6 +302,13 @@ class Kit:
             return await self.bhv.get_active_weapon(pid)
         except Exception:
             return None
+
+    def _muzzle(self, weapon):
+        """当前武器的炮口偏移（米）；weapon 为 None/未知时回退基础弹 2.5m。"""
+        try:
+            return float(MUZZLE_OFFSET.get(int(weapon), 2.50))
+        except Exception:
+            return 2.50
 
     def range_of(self, weapon):
         try:
@@ -299,8 +387,94 @@ class Kit:
         await self._require(pid)
         return await self.bhv.turn_to_rot(pid, float(rot), tol=tol)
 
-    async def turn_to_angle(self, pid, world_angle_rad, tol_deg=1.8, max_pulses=40,
+    async def _press_until(self, pid, key, limit_raw, sign, timeout=3.0):
+        """**长按住** key，每 8ms 读一次 raw rot，到达 limit_raw 就取消任务松键。
+
+        利用 `set_input` 的 finally 保证取消时松键；比"30ms 分块"精细约 4 倍。
+        """
+        task = asyncio.create_task(
+            self.ctl.set_input(pid, **{key: True}, hold=min(3.0, float(timeout))))
+        t0 = time.time()
+        try:
+            while time.time() - t0 < float(timeout):
+                cur = await self.rotation(pid)
+                if cur is None:
+                    break
+                if (sign > 0 and cur >= limit_raw) or (sign < 0 and cur <= limit_raw):
+                    break
+                await asyncio.sleep(0.008)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                pass
+            try:
+                await self.ctl.set_input(pid, hold=0.0)
+            except Exception:
+                pass
+
+    async def turn_precise(self, pid, world_angle_rad, tol_deg=0.8, lead_deg=1.2,
+                           max_rounds=4, timeout=6.0):
+        """**连续按住 + 高频读 rot + 提前释放 + 过冲补偿**的精准转向。
+
+        比脉冲法精度高得多（实测残差 mean 0.8~1.2°、max <4°；脉冲法 3~6°、max 12°+）。
+        返回 ``{'ok','actual_deg'(归一化 [-180,180)),'err_deg','best_err_deg',
+        'final_err_deg','precise'}``。
+        """
+        await self._require(pid)
+        t0 = time.time()
+        target_world = float(world_angle_rad) + math.pi / 2
+        for _i in range(int(max_rounds)):
+            if time.time() - t0 > float(timeout):
+                break
+            cur = await self.rotation(pid)
+            if cur is None:
+                break
+            target_raw = cur + _wrap_pi(target_world - cur)
+            err = target_raw - cur
+            if abs(err) <= math.radians(float(tol_deg)):
+                break
+            key = 'right' if err > 0 else 'left'
+            sign = 1 if err > 0 else -1
+            lead = math.radians(float(lead_deg) * (0.6 ** _i))
+            limit = target_raw - lead if err > 0 else target_raw + lead
+            await self._press_until(pid, key, limit, sign,
+                                    timeout=min(3.0, abs(err) / TANK_ROTATION_SPEED + 1.2))
+        try:
+            await self.ctl.set_input(pid, hold=0.0)
+        except Exception:
+            pass
+        await asyncio.sleep(0.06)
+        cur = await self.rotation(pid)
+        if cur is None:
+            return {'ok': False, 'actual_deg': None, 'err_deg': None,
+                    'best_err_deg': None, 'final_err_deg': None, 'precise': True}
+        target_raw = cur + _wrap_pi(target_world - cur)
+        err = target_raw - cur
+        return {'ok': abs(err) <= math.radians(float(tol_deg) + 0.6),
+                'actual_deg': math.degrees(_wrap_pi(cur - math.pi / 2)),
+                'err_deg': -math.degrees(err),
+                'best_err_deg': abs(math.degrees(err)),
+                'final_err_deg': math.degrees(err),
+                'precise': True}
+
+    async def turn_to_angle(self, pid, world_angle_rad, tol_deg=1.2, max_pulses=40,
                             settle=True):
+        """转向到**世界方向角**：优先连续按住精准转向，失败退回脉冲自适应。
+
+        ``actual_deg`` **归一化到 [-180,180)**；`ok` 基于停稳后最终朝向。
+        """
+        res = await self.turn_precise(pid, world_angle_rad, tol_deg=tol_deg)
+        if res.get('ok'):
+            return res
+        res2 = await self._turn_adaptive(pid, world_angle_rad, tol_deg=tol_deg,
+                                         max_pulses=max_pulses, settle=settle)
+        res2['fallback'] = True
+        return res2
+
+    async def _turn_adaptive(self, pid, world_angle_rad, tol_deg=1.8, max_pulses=40,
+                             settle=True):
         """自适应闭环转向到**世界方向角**（弧度）。
 
         接近目标时自动缩小脉冲；检测到过冲就回退（避免极限环振荡）。
@@ -385,6 +559,11 @@ class Kit:
         return {'arrived': bool(arrived), 'pos': pos, 'dist': dist,
                 'elapsed': round(_t.time() - t0, 2)}
 
+    async def navigate_segment(self, pid, target_xy, max_seconds=3.0, arrival=1.5):
+        """有界单段寻路：最多走 max_seconds 秒（超时取消并松键），返回结果字典。"""
+        return await self.navigate_to_ex(pid, target_xy, arrival=arrival,
+                                         timeout=float(max_seconds))
+
     async def fire(self, pid, seconds=0.6):
         await self.hold(pid, seconds, fire=True)
 
@@ -420,7 +599,7 @@ class Kit:
         pos = await self.bhv.get_position(pid)
         if pos is None:
             return None
-        off = float(MUZZLE_OFFSET.get(int(await self.weapon(pid)), 2.50))
+        off = self._muzzle(await self.weapon(pid))
         if max_traveled is None:
             max_traveled = await self.bullet_range(pid)
         cap = MAX_PATH_BOUNCES if max_bounces is None else int(max_bounces)
@@ -465,7 +644,7 @@ class Kit:
         pos = await self.bhv.get_position(pid)
         if pos is None:
             return []
-        off = float(MUZZLE_OFFSET.get(int(await self.weapon(pid)), 2.50))
+        off = self._muzzle(await self.weapon(pid))
         if max_traveled is None:
             max_traveled = await self.bullet_range(pid)
         out = []
@@ -494,15 +673,36 @@ class Kit:
             out.append(item)
         return out
 
-    def is_good_candidate(self, item, pid, target_id=None, max_bounces=6,
-                          max_traveled=None, min_self_risk=None):
-        """候选是否"可安全开火"的默认策略（参数可覆盖）：
+    # 开火策略分级：strict（默认，保守）/ relaxed（多反弹仍可搏）/ loose（更宽）
+    PROFILES = {
+        'strict':  {'max_bounces': 5, 'max_traveled': 110.0, 'long_bounces': 4,
+                    'long_traveled': 80.0, 'risk_short': 4.0, 'risk_long': 20.0},
+        'relaxed': {'max_bounces': 8, 'max_traveled': 140.0, 'long_bounces': 4,
+                    'long_traveled': 80.0, 'risk_short': 4.0, 'risk_long': 6.0},
+        'loose':   {'max_bounces': 12, 'max_traveled': 180.0, 'long_bounces': 4,
+                    'long_traveled': 80.0, 'risk_short': 3.0, 'risk_long': 4.0},
+    }
+
+    def is_good_candidate(self, item, pid, target_id=None, profile='strict',
+                          max_bounces=None, max_traveled=None, min_self_risk=None):
+        """候选是否"可安全开火"（按 profile 分级；参数可覆盖）：
 
         * 命中对手（非自己）且 `self_hit == False`；
-        * `bounces <= max_bounces`（默认 6：多反弹路径实测偏差可达 16m）；
-        * `traveled <= max_traveled`（默认用射程）；
-        * 自伤风险：默认 `self_risk >= max(4, 20 if bounces>=5 or traveled>=100 else 4)`。
+        * `bounces <= max_bounces`；`traveled <= max_traveled`；
+        * 自伤风险：短弹道需 `>= risk_short`，长弹道（bounces>=long_bounces 或
+          traveled>=long_traveled）需 `>= risk_long`。
+
+        profile：``strict``(默认) / ``relaxed`` / ``loose``。
+        窄地图里 strict 常全灭，可用 relaxed 搏一搏（实测多 2 杀）。
         """
+        pol = dict(self.PROFILES.get(profile, self.PROFILES['strict']))
+        if max_bounces is not None:
+            pol['max_bounces'] = int(max_bounces)
+        if max_traveled is not None:
+            pol['max_traveled'] = float(max_traveled)
+        if min_self_risk is not None:
+            pol['risk_short'] = float(min_self_risk)
+            pol['risk_long'] = float(min_self_risk)
         if not item or not item.get('hit_pid'):
             return False
         if str(item['hit_pid']) == str(pid):
@@ -512,47 +712,63 @@ class Kit:
         if item.get('self_hit'):
             return False
         nb = int(item.get('bounces') or 0)
-        if nb > int(max_bounces):
-            return False
-        if max_traveled is not None and float(item.get('traveled') or 0) > float(max_traveled):
-            return False
+        tv = float(item.get('traveled') or 0)
+        return bool(nb <= int(pol['max_bounces']) and tv <= float(pol['max_traveled'])
+                    and self.candidate_tier(item, pid, target_id, profile) is not None)
+
+    def candidate_tier(self, item, pid, target_id=None, profile='strict'):
+        """判定候选所属档位并检查自伤风险 → 返回档位字符串或 None。"""
+        pol = dict(self.PROFILES.get(profile, self.PROFILES['strict']))
+        nb = int(item.get('bounces') or 0)
+        tv = float(item.get('traveled') or 0)
         risk = float(item.get('self_risk') or 0.0)
-        if min_self_risk is None:
-            need = 20.0 if (nb >= 5 or float(item.get('traveled') or 0) >= 100.0) else 4.0
-        else:
-            need = float(min_self_risk)
-        return bool(risk >= need)
+        need = float(pol['risk_long']) if (nb >= int(pol['long_bounces']) or tv >= float(pol['long_traveled'])) else float(pol['risk_short'])
+        if risk < need:
+            return None
+        if nb > int(pol['max_bounces']) or tv > float(pol['max_traveled']):
+            return None
+        return profile
 
     async def scan_adaptive(self, pid, target_id=None, steps=(30, 10, 5, 2),
-                            robust_deg=None, merge=True, stop_early=False):
-        """粗→细自适应扫描（v4：默认**合并所有步长**的候选，避免粗扫长解掩盖近角短解）。
+                            robust_deg=None, profiles=('strict', 'relaxed', 'loose'),
+                            merge=True, stop_early=False):
+        """粗→细 + **多档策略**扫描。
 
+        依次对每个 profile 扫描全部步长并合并候选；一旦某档找到候选就返回该档
+        （默认 strict → relaxed → loose），每个候选带 ``tier`` 字段。
         返回 ``(candidates, used_steps)``；候选按 quality 升序、按角度去重。
-        ``stop_early=True`` 时恢复 v3 行为（粗步长一有候选就返回）。
         """
         used = []
-        merged = {}
-        for st in steps:
-            used.append(int(st))
-            res = await self.scan(pid, step_deg=st, robust_deg=robust_deg)
-            cands = [r for r in res if self.is_good_candidate(r, pid, target_id)]
-            if cands and stop_early:
-                cands.sort(key=lambda r: r['quality'])
-                return cands, used
-            for c in cands:
-                key = round(math.degrees(c['angle_rad']), 2)
-                prev = merged.get(key)
-                if prev is None or c['quality'] < prev['quality']:
-                    merged[key] = c
-            if stop_early and not merge and cands:
-                break
-        out = sorted(merged.values(), key=lambda r: r['quality'])
-        return out, used
+        for prof in profiles:
+            merged = {}
+            for st in steps:
+                if int(st) not in used:
+                    used.append(int(st))
+                res = await self.scan(pid, step_deg=st, robust_deg=robust_deg)
+                cands = [r for r in res
+                         if self.is_good_candidate(r, pid, target_id, profile=prof)]
+                if cands and stop_early:
+                    cands.sort(key=lambda r: r['quality'])
+                    for c in cands:
+                        c['tier'] = prof
+                    return cands, used
+                for c in cands:
+                    key = round(math.degrees(c['angle_rad']), 2)
+                    prev = merged.get(key)
+                    if prev is None or c['quality'] < prev['quality']:
+                        c['tier'] = prof
+                        merged[key] = c
+                if stop_early and not merge and cands:
+                    break
+            if merged:
+                out = sorted(merged.values(), key=lambda r: r['quality'])
+                return out, used
+        return [], used
 
     async def find_aim(self, pid, target_xy, target_id=None, require_bounce=False,
                        max_traveled=None, max_bounces=None):
         await self._require(pid)
-        off = float(MUZZLE_OFFSET.get(int(await self.weapon(pid)), 2.50))
+        off = self._muzzle(await self.weapon(pid))
         if max_traveled is None:
             max_traveled = await self.bullet_range(pid)
         cap = MAX_PATH_BOUNCES if max_bounces is None else int(max_bounces)
@@ -560,21 +776,25 @@ class Kit:
             pid, tuple(target_xy), target_id=target_id, require_bounce=require_bounce,
             max_traveled=float(max_traveled), max_bounces=cap, muzzle_offset=off)
 
-    async def fine_aim(self, pid, target_id, center_rad, span_deg=10.0, step_deg=1.0,
-                       max_bounces=6):
-        """在 ``center_rad`` ±span_deg 内按 step_deg 细搜，返回"命中目标且安全"的最佳项。
+    async def fine_aim(self, pid, target_id, center_rad, span_deg=10.0, step_deg=0.25,
+                       profile='strict', max_bounces=None, max_traveled=None,
+                       min_self_risk=None, prefer='window_center'):
+        """在 ``center_rad`` ±span_deg 内细采样，找**命中窗口**并返回窗口中心角。
 
-        用于转向后微调：命中窗口常只有 1~3°，而转向分辨率约 1~5°。
-        优先离 center 最近，其次 quality 最小。找不到返回 None。
+        v5：不再返回"离中心最近的角"（窗口 1~3°、瞄准误差 1~2°，瞄边缘≈瞄外面），
+        而是按 ``step_deg``（默认 0.25°）建窗口，选**离中心最近的窗口的中心**。
+
+        ``prefer='nearest'`` 可恢复旧行为（返回离中心最近的可命中角）。
+        找不到返回 None；返回项带 ``window``（窗口宽度，度）。
         """
         await self._require(pid)
         pos = await self.bhv.get_position(pid)
         if pos is None:
             return None
-        off = float(MUZZLE_OFFSET.get(int(await self.weapon(pid)), 2.50))
+        off = self._muzzle(await self.weapon(pid))
         rng = await self.bullet_range(pid)
-        n = max(1, int(float(span_deg) / float(step_deg)))
-        best = None
+        n = max(1, int(round(float(span_deg) / float(step_deg))))
+        hits = []          # (k, item)
         for k in range(-n, n + 1):
             ang = float(center_rad) + math.radians(k * float(step_deg))
             d = await self.bhv._raycast_path(
@@ -582,12 +802,45 @@ class Kit:
                 max_bounces=MAX_PATH_BOUNCES, max_dist=rng * 1.5,
                 target_tank_id=None, origin_offset=off)
             it = self._mk_ray(pid, ang, d, rng, pos)
-            if not self.is_good_candidate(it, pid, target_id, max_bounces=max_bounces):
+            if not self.is_good_candidate(it, pid, target_id, profile=profile,
+                                          max_bounces=max_bounces,
+                                          max_traveled=max_traveled,
+                                          min_self_risk=min_self_risk):
                 continue
-            key = (abs(k), it['quality'])
-            if best is None or key < best[0]:
-                best = (key, it)
-        return best[1] if best else None
+            hits.append((k, it))
+        if not hits:
+            return None
+        if prefer == 'nearest':
+            k, it = min(hits, key=lambda p: (abs(p[0]), p[1]['quality']))
+            it['window'] = float(step_deg)
+            return it
+        # 分组成连续窗口
+        hits.sort(key=lambda p: p[0])
+        windows = []
+        cur = [hits[0]]
+        for prev, nxt in zip(hits, hits[1:]):
+            if nxt[0] - prev[0] == 1:
+                cur.append(nxt)
+            else:
+                windows.append(cur)
+                cur = [nxt]
+        windows.append(cur)
+        # 选"离中心最近的窗口的中心"
+        def win_key(w):
+            ks = [p[0] for p in w]
+            c = (min(ks) + max(ks)) / 2.0
+            return (abs(c), -(len(w)))
+        w = min(windows, key=win_key)
+        ks = [p[0] for p in w]
+        mid_k = (min(ks) + max(ks)) / 2.0
+        ang = float(center_rad) + math.radians(mid_k * float(step_deg))
+        d = await self.bhv._raycast_path(
+            pos[0], pos[1], math.degrees(ang), 0.0, 0.0,
+            max_bounces=MAX_PATH_BOUNCES, max_dist=rng * 1.5,
+            target_tank_id=None, origin_offset=off)
+        it = self._mk_ray(pid, ang, d, rng, pos)
+        it['window'] = float((max(ks) - min(ks) + 1) * float(step_deg))
+        return it
 
     async def aim_and_fire(self, pid, target_xy, target_id=None, fire_sec=0.6,
                            tol_deg=1.8, robust_deg=None, self_risk_ok=True,
