@@ -356,6 +356,21 @@ async def main():
               % (st['state'], st['gameId'], st['mode']), flush=True)
         await cdp.close()
         return 1
+    # ★ 2026-10-24 硬校验：必须真的是在线局（client online）。
+    #   背景：客户端未认证/仍在上一局时，建房会静默退化成 client local，
+    #   导致"毒圈/服务端行为"类实验全部白做（毒圈只在在线房间出现）。
+    if str(info.get('mode')) != 'client online':
+        st = await state(cdp)
+        print('[online] ❌ 当前模式=%s（期望 client online）→ 客户端未认证或仍在本局，已中止'
+              % st['mode'], flush=True)
+        print('[online]    处理：先 scripts/leave_online_game.py auto 回大厅，或重载页面等 authenticated',
+              flush=True)
+        try:
+            await cdp.eval("(() => { try { Menu.leaveGame(true); } catch (e) {} return 'l'; })()")
+        except Exception:
+            pass
+        await cdp.close()
+        return 1
     print('[online] ✅ 对局开始: state=%s mode=%s gameId=%s tanks=%s'
           % (info['state'], info['mode'], info['gameId'], info['tanks']), flush=True)
 
