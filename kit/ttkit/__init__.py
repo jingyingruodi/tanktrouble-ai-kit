@@ -1,56 +1,39 @@
 """
-ttkit —— TankTrouble 角色信息获取 / 操作封装包（黑盒 API **v2**）
+ttkit —— TankTrouble 角色信息获取 / 操作封装包（黑盒 API **v3**）
 ================================================================
 把"读取游戏状态"和"操作角色"封装成稳定、带文档的方法。所有控制都走游戏自己的
 `setInputState`（与人类按键等价，在线/本地都安全）。
 
-v2 相比 v1 的关键改进（来自两轮黑盒测试的反馈）：
-  * `turn_to_angle()` 变成**闭环**：迭代转到目标角，返回**实测角/残差**（不再只回 bool）；
-  * `aim_and_fire()` 先转向，再在**实际朝向**上复核弹道（含 ±鲁棒性检查），通过才开火；
-  * `scan()` 增加 `robust`（±robust_deg 邻域仍命中）与 `quality`（越小越可靠）字段；
-  * 射程按**当前武器**自动取（基础弹 180m、加特林 54m、霰弹 64m、激光 144m、双管 108m）；
-  * `raycast()` 增加 `hit` 布尔；未命中时 `traveled` 截断到射程，不再虚高到 1.5×射程；
-  * 所有控制方法统一校验"必须是自己可控的角色"；
-  * `my_pid()` 找不到指定角色时**抛 RuntimeError**（不再静默回退）；
-  * `rotation()` 返回**原始累积 rot**（另给 `rotation_norm()`）；
-  * `close()` 关闭两条 CDP 连接（v1 会泄漏一条）；
-  * 补齐地形/寻路/武器/弹丸/停稳查询 API。
-
-快速开始
---------
-    import asyncio
-    from ttkit import Kit
-
-    async def main():
-        kit = await Kit().connect()
-        pid = await kit.my_pid()                       # 默认 arrows 角色
-        print(await kit.snapshot())
-        r = await kit.turn_to_angle(pid, 1.2)          # 世界方向角（弧度）
-        print(r)                                       # {'ok','actual_deg','err_deg','iters'}
-        await kit.close()
-
-    asyncio.run(main())
+v3 相比 v2 的关键改进（来自第三轮黑盒测试的反馈）：
+  * **自伤风险检测** `self_risk`：预测路径在**第一次反弹之后**离自己过近时报警
+    （官方零宽射线与实际弹丸有偏差，实测曾"预测命中对手、实际偏 16.5m 打死自己"）；
+  * **`aim_and_fire` 的鲁棒检查改为可选**（v2 默认 ±1.5° 在窄窗口图上几乎永不开火）；
+  * `turn_to_angle()` 改为**自适应脉冲 + 过冲回退**，返回最佳可达角（避免容差附近极限环振荡）；
+  * `scan_adaptive()`：粗扫→细扫（30→10→5→2°），命中窗口只有 1~3° 时也能找到解；
+  * `scan()` 每项新增 `path` / `self_risk`（米）/ `self_risk_ok`；
+  * 新增 `reset_maze_cache()`（迷宫每回合重生成，避免旧回合墙缓存污染寻路预筛）、
+    `wait_target_gone()`、`navigate_to_ex()`；`roles()` 缓存缩短到 1s。
 
 坐标/角度约定
 -------------
-* 世界坐标单位：米（1 格 = 10 米）。
-* "炮口朝向"用**世界方向角**（弧度，0=+X，逆时针）；游戏内部 `rot = 角度 + π/2`。
-* `rotation(pid)` = 原始累积 rot（可超出 ±π）；`rotation_norm(pid)` = 归一化值。
+* 世界坐标：米（1 格 = 10 米）。"炮口朝向"用**世界方向角**（弧度，0=+X，逆时针）；
+  游戏内部 `rot = 角度 + π/2`。
+* `rotation(pid)` = 原始累积 rot（可超 ±π）；`rotation_norm(pid)` = 归一化值。
 
-自伤标签（deadlyToOwner）
-------------------------
-弹丸**第一次撞墙/撞盾后**才变成"可伤发射者"；在那之前对发射者无害（会穿透）。
-游戏内实测：第一次反弹瞬间 `deadlyToOwner` False→True。
-因此 `scan()` 里 `self_hit` 只在 `bounces >= 1` 时才算；0 反弹命中自己记
-`self_hit_harmless=True`。
+自伤标签与自伤风险
+------------------
+* `deadlyToOwner`：弹丸第一次撞墙/盾后才可能伤发射者（之前穿透自己）。
+* `self_hit`：官方射线第一个命中的坦克是**自己**且 bounces≥1（理论自伤）。
+* `self_risk`：官方射线在**第一次反弹后**离自己车体中心的最小距离（米）。
+  由于推演/实弹有偏差，`self_risk < SELF_RISK_RADIUS(4m)` 时应视为**有自伤风险**，
+  即使 `self_hit=False` 也不要开火。
 
-可靠性提示（务必读）
---------------------
-1. 转向精度约 ±1~2°（输入按物理帧量化）。**1° 的角度差就可能让官方弹道拓扑突变**
-   （命中距离/反弹数完全改变），所以扫描到的角度必须用**实际朝向**复核后再开火。
-2. 官方零宽射线推演与实际弹丸（半径 0.25m）在**远距/多反弹**路径上会累积偏差
-   （实测 6.5s 后横向偏差 7m+）。**短距（<60m）、少反弹（≤4）最可靠**。
-3. `scan()` 返回的 `robust`（±1.5° 邻域仍命中）与 `quality`（越小越好）可用来挑稳的解。
+可靠性提示
+----------
+1. 转向精度约 ±1~2°（输入按物理帧量化）；1° 差就可能让弹道拓扑突变，开火前必须用**实际朝向**复核。
+2. 官方零宽射线与实际 0.25m 弹丸在远距/多反弹路径上偏差会累积（实测 10 反弹/156m 偏 25m+）。
+   **短距、少反弹、`self_risk` 大**的解最可靠。
+3. `scan()` 很快（12 方向 ~10~20ms；2° 全扫 180 条 ~150ms）。
 """
 import asyncio
 import json
@@ -70,22 +53,18 @@ _DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(_
 
 __all__ = ['Kit', 'BULLET_SPEED', 'BULLET_LIFETIME', 'TANK_RADIUS',
            'TANK_FORWARD_SPEED', 'TANK_BACK_SPEED', 'TANK_ROTATION_SPEED',
-           'WEAPON_NAMES', 'MUZZLE_OFFSET', 'WEAPON_RANGE']
+           'WEAPON_NAMES', 'MUZZLE_OFFSET', 'WEAPON_RANGE', 'SELF_RISK_RADIUS']
 
 WEAPON_NAMES = {-1: 'BULLET', 0: 'LASER', 1: 'DOUBLE_BARREL', 2: 'SHOTGUN',
                 3: 'HOMING_MISSILE', 4: 'MINE', 5: 'GATLING_GUN'}
-# 炮口偏移（米）：真实弹丸从炮口出膛，不是车体中心
+# 炮口偏移（米）
 MUZZLE_OFFSET = {-1: 2.50, 0: 2.50, 1: 2.25, 2: 2.45, 3: 2.50, 4: 1.45, 5: 3.00}
-# 射程（米）= 弹速 × 寿命（游戏内实测）
-WEAPON_RANGE = {-1: 180.0,   # 18 × 10
-                0: 144.0,    # 180 × 0.8
-                1: 108.0,    # 18 × 6（双管 lifetime=6）
-                2: 64.0,     # 32 × 2
-                3: 180.0,    # 18 × 10（追踪弹）
-                4: 0.0,      # 地雷（部署型）
-                5: 54.0}     # 27 × 2
+# 射程（米）= 弹速 × 寿命
+WEAPON_RANGE = {-1: 180.0, 0: 144.0, 1: 108.0, 2: 64.0, 3: 180.0, 4: 0.0, 5: 54.0}
 
-MAX_PATH_BOUNCES = 100       # 官方路径算法安全上限（**不是游戏规则**：反弹无实际上限）
+MAX_PATH_BOUNCES = 100
+# 反弹后路径离自己多近算"自伤风险"（米）。实测预测偏差可达 16m，取 4m 保守。
+SELF_RISK_RADIUS = 4.0
 
 
 class Kit:
@@ -95,7 +74,7 @@ class Kit:
         self.port = port
         self.ctl = None
         self.bhv = None
-        self.gu = _gu                  # 地形/迷宫工具模块（进阶）
+        self.gu = _gu
         self._roles_cache = {}
         self._roles_ts = 0.0
 
@@ -120,7 +99,7 @@ class Kit:
         return self
 
     async def close(self):
-        """释放连接（**两条** CDP 连接都关）。"""
+        """释放连接（两条 CDP 连接都关）。"""
         for obj in (getattr(self.bhv, 'ctl', None), self.ctl):
             try:
                 cdp = getattr(obj, 'cdp', None)
@@ -131,18 +110,27 @@ class Kit:
         self.bhv = None
         self.ctl = None
 
+    async def reset_maze_cache(self):
+        """清空行为层缓存的墙/迷宫数据（迷宫每回合重生成，跨回合必须清）。"""
+        for attr in ('_walls_cache', '_maze_cache', '_tiles_cache', '_wall_cache'):
+            try:
+                if hasattr(self.bhv, attr):
+                    setattr(self.bhv, attr, None)
+            except Exception:
+                pass
+
     # ────────────────────────── 信息（只读） ──────────────────────────
     async def roles(self, refresh=False):
-        """可控角色：``{pid: role}``（role ∈ arrows/keyboard/mouse）。"""
+        """可控角色：``{pid: role}``。默认 1s 缓存。"""
         now = time.time()
-        if refresh or not self._roles_cache or now - self._roles_ts > 2.0:
+        if refresh or not self._roles_cache or now - self._roles_ts > 1.0:
             self._roles_cache = await self.bhv.get_roles()
             self._roles_ts = now
         return dict(self._roles_cache)
 
     async def my_pid(self, role='arrows'):
         """选出"自己的角色"（默认 arrows）。找不到该角色时**抛 RuntimeError**。"""
-        rs = await self.roles()
+        rs = await self.roles(refresh=True)
         for pid, r in rs.items():
             if r == role:
                 return pid
@@ -151,7 +139,6 @@ class Kit:
         raise RuntimeError('没有 role=%r 的可控角色（当前可控=%r）' % (role, rs))
 
     async def _require(self, pid):
-        """校验 pid 是本 AI 的可控角色，否则抛 ValueError。"""
         if not isinstance(pid, str) or not pid:
             raise ValueError('pid 必须是非空字符串（用 roles()/my_pid() 获取）')
         rs = await self.roles()
@@ -159,20 +146,16 @@ class Kit:
             raise ValueError('拒绝操作：pid=%s 不是可控角色（可控=%s）' % (pid, list(rs.keys())))
 
     async def snapshot(self):
-        """局面快照：
-        ``{round_state, controllable, tanks: {pid: {x,y,rot,alive,weapon}}}``"""
+        """局面快照：``{round_state, controllable, tanks:{pid:{x,y,rot,alive,weapon}}}``"""
         out = {'round_state': await self.bhv.get_round_state(),
                'controllable': await self.roles(), 'tanks': {}}
         for pid in await self._all_pids():
             pos = await self.bhv.get_position(pid)
             if pos is None:
                 continue
-            out['tanks'][pid] = {
-                'x': pos[0], 'y': pos[1],
-                'rot': await self.rotation(pid),
-                'alive': await self.bhv.is_alive(pid),
-                'weapon': await self.weapon(pid),
-            }
+            out['tanks'][pid] = {'x': pos[0], 'y': pos[1], 'rot': await self.rotation(pid),
+                                 'alive': await self.bhv.is_alive(pid),
+                                 'weapon': await self.weapon(pid)}
         return out
 
     async def _all_pids(self):
@@ -182,15 +165,13 @@ class Kit:
             return []
 
     async def round_state(self):
-        """回合状态：``in round`` / ``counting down`` / ``between rounds`` / ..."""
         return await self.bhv.get_round_state()
 
     async def position(self, pid):
-        """世界坐标 (x, y)；不在场返回 None。"""
         return await self.bhv.get_position(pid)
 
     async def rotation(self, pid):
-        """**原始累积 rot**（弧度，可能超出 ±π；游戏 getRotation 的累加值）。"""
+        """**原始累积 rot**（弧度）。"""
         try:
             raw = await self.bhv._raw_rot(pid)
             if raw is not None:
@@ -200,7 +181,6 @@ class Kit:
         return await self.bhv.get_rotation(pid)
 
     async def rotation_norm(self, pid):
-        """归一化到 [-π, π) 的 rot。"""
         r = await self.rotation(pid)
         if r is None:
             return None
@@ -210,11 +190,9 @@ class Kit:
         return await self.bhv.is_alive(pid)
 
     async def opponents(self, my_pid):
-        """除自己外的所有坦克 pid。"""
         return [p for p in await self._all_pids() if str(p) != str(my_pid)]
 
     async def nearest_opponent(self, my_pid):
-        """最近的其他坦克 → ``(pid, (x,y), distance)`` 或 None。"""
         me = await self.position(my_pid)
         if me is None:
             return None
@@ -229,29 +207,24 @@ class Kit:
         return best
 
     async def weapon(self, pid):
-        """当前武器类型（-1 基础弹 / 0 激光 / 1 双管 / 2 霰弹 / 3 追踪 / 4 地雷 / 5 加特林）。"""
         try:
             return await self.bhv.get_active_weapon(pid)
         except Exception:
             return None
 
     def range_of(self, weapon):
-        """该武器射程（米）= 弹速 × 寿命；未知按基础弹 180m。"""
         try:
             return WEAPON_RANGE.get(int(weapon), 180.0)
         except Exception:
             return 180.0
 
     async def bullet_range(self, pid):
-        """当前武器射程（米）。"""
         return self.range_of(await self.weapon(pid))
 
     async def terrain(self):
-        """完整地形摘要（tiles / walls / zones）。"""
         return await _gu.get_terrain(self.ctl)
 
-    async def open_tiles(self, ctl=None):
-        """所有可通行格的**中心世界坐标**列表 [(x,y), ...]。"""
+    async def open_tiles(self):
         terr = await self.terrain()
         out = []
         tiles = (terr or {}).get('tiles') or []
@@ -262,15 +235,12 @@ class Kit:
         return out
 
     async def plan_path(self, start_xy, end_xy):
-        """迷宫寻路：返回格子序列 ``[(gx,gy), ...]``（无路返回 []）。"""
         return await _gu.plan_maze_path(self.ctl, tuple(start_xy), tuple(end_xy))
 
     async def maze_distance(self, from_xy, to_xy):
-        """两点迷宫距离（格数）或 None。"""
         return await _gu.maze_distance(self.ctl, tuple(from_xy), tuple(to_xy))
 
     async def projectiles(self):
-        """场上弹丸：``[{id, playerId, type, x, y, vx, vy, timeAlive, deadlyToOwner}]``。"""
         js = """(() => { const gc = GameManager.getGameController();
           if (!gc) return '[]';
           const ps = gc.roundController.model.getProjectiles(); const out = [];
@@ -286,16 +256,22 @@ class Kit:
         except Exception:
             return []
 
+    async def wait_target_gone(self, target_id, timeout=8.0, poll=0.2):
+        """轮询等待目标不在场（击杀/离场）→ True。用于开火后确认命中。"""
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if await self.position(target_id) is None:
+                return True
+            await asyncio.sleep(poll)
+        return False
+
     # ────────────────────────── 操作（只允许自己的角色） ──────────────────────────
     async def hold(self, pid, seconds, fwd=False, back=False, left=False, right=False, fire=False):
-        """按住输入 ``seconds`` 秒（内部 30Hz 重发，结束自动松开）。
-        在线输入上报粒度 0.5s，重要动作建议按住 ≥0.6s。"""
         await self._require(pid)
         await self.ctl.set_input(pid, fwd=fwd, back=back, left=left, right=right,
                                  fire=fire, hold=seconds)
 
     async def stop(self, pid):
-        """停止移动/转动/开火，并等物理速度衰减（稳）。"""
         await self._require(pid)
         await self.ctl.set_input(pid, hold=0.12)
         try:
@@ -304,47 +280,60 @@ class Kit:
             await asyncio.sleep(0.08)
 
     async def move_forward(self, pid, seconds=0.4):
-        """前进 ``seconds`` 秒（实测 15.95 m/s）。"""
         await self.hold(pid, seconds, fwd=True)
 
     async def move_back(self, pid, seconds=0.4):
-        """后退 ``seconds`` 秒（实测 12.8 m/s）。"""
         await self.hold(pid, seconds, back=True)
 
     async def turn_to_rot(self, pid, rot, tol=0.03):
-        """按**游戏内部 rot** 转向（进阶；一般用 turn_to_angle）。"""
         await self._require(pid)
         return await self.bhv.turn_to_rot(pid, float(rot), tol=tol)
 
-    async def turn_to_angle(self, pid, world_angle_rad, tol_deg=1.2, max_iters=None):
-        """闭环转向到**世界方向角**（弧度）。
+    async def turn_to_angle(self, pid, world_angle_rad, tol_deg=1.8, max_pulses=40):
+        """自适应闭环转向到**世界方向角**（弧度）。
 
-        内部委托 `behavior.turn_to_rot`（高频小脉冲 + 逐帧读原始 rot，容差默认 1.2°），
-        返回 ``{'ok', 'actual_deg', 'err_deg', 'iters'}``。
-
-        * 转向输入按物理帧量化（单次脉冲约 4.8°），``tol_deg`` 建议 1.0~2.0；
-          设太小（<1°）可能来回振荡。
-        * ``actual_deg`` 是**实测**炮口世界角（供开火前复核用）。
+        接近目标时自动缩小脉冲；检测到过冲就回退并接受最佳可达角（避免极限环振荡）。
+        返回 ``{'ok','actual_deg','err_deg','best_err_deg'}``。
         """
         await self._require(pid)
         target = float(world_angle_rad) + math.pi / 2
         tol = math.radians(float(tol_deg))
-        ok = False
+        best = None            # (abs_err, cur_rot)
+        prev_sign = 0
+        flips = 0
+        pulse = 0.02
+        for _ in range(int(max_pulses)):
+            cur = await self.rotation(pid)
+            if cur is None:
+                break
+            err = (target - cur + math.pi) % (2 * math.pi) - math.pi
+            ae = abs(err)
+            if best is None or ae < best[0]:
+                best = (ae, cur)
+            if ae <= tol:
+                break
+            s = 1 if err > 0 else -1
+            if prev_sign and s != prev_sign:
+                flips += 1
+                pulse = max(0.008, pulse * 0.5)
+                if flips >= 3:
+                    break
+            prev_sign = s
+            await self.hold(pid, pulse, **({'right': True} if s > 0 else {'left': True}))
+            await asyncio.sleep(0.03)
+            if pulse < 0.01 and ae > math.radians(10):
+                pulse = 0.02
         try:
-            ok = await self.bhv.turn_to_rot(pid, target, tol=tol)
+            await self.ctl.set_input(pid, hold=0.05)
         except Exception:
-            ok = False
-        cur = await self.rotation(pid)
-        if cur is None:
-            return {'ok': False, 'actual_deg': None, 'err_deg': None, 'iters': None}
-        err = (target - cur + math.pi) % (2 * math.pi) - math.pi
-        return {'ok': bool(ok) or abs(err) <= tol + math.radians(0.8),
-                'actual_deg': math.degrees(cur - math.pi / 2),
-                'err_deg': math.degrees(-err), 'iters': None}
+            pass
+        if best is None:
+            return {'ok': False, 'actual_deg': None, 'err_deg': None, 'best_err_deg': None}
+        ok = best[0] <= tol + math.radians(1.0)
+        return {'ok': bool(ok), 'actual_deg': math.degrees(best[1] - math.pi / 2),
+                'err_deg': -math.degrees(best[0]), 'best_err_deg': math.degrees(best[0])}
 
     async def navigate_to(self, pid, target_xy, arrival=1.5, timeout=None):
-        """迷宫寻路移动到 target_xy=(x,y)（米）。
-        ``timeout`` 秒内未到达则取消（内部会正确松键）。返回是否到达。"""
         await self._require(pid)
         coro = self.bhv.navigate_to(pid, tuple(target_xy), arrival=arrival)
         if timeout is None:
@@ -354,21 +343,48 @@ class Kit:
         except asyncio.TimeoutError:
             return False
 
+    async def navigate_to_ex(self, pid, target_xy, arrival=1.5, timeout=None):
+        """带信息的寻路：返回 ``{arrived, pos, dist, elapsed}``。"""
+        import time as _t
+        t0 = _t.time()
+        arrived = await self.navigate_to(pid, target_xy, arrival=arrival, timeout=timeout)
+        pos = await self.position(pid)
+        dist = None
+        if pos is not None:
+            dist = math.hypot(pos[0] - target_xy[0], pos[1] - target_xy[1])
+        return {'arrived': bool(arrived), 'pos': pos, 'dist': dist,
+                'elapsed': round(_t.time() - t0, 2)}
+
     async def fire(self, pid, seconds=0.6):
-        """开一枪（按住 fire ``seconds`` 秒）。"""
         await self.hold(pid, seconds, fire=True)
 
     # ────────────────────────── 弹道 / 扫描 / 火控 ──────────────────────────
+    @staticmethod
+    def _seg_dist(px, py, ax, ay, bx, by):
+        vx, vy = bx - ax, by - ay
+        wx, wy = px - ax, py - ay
+        L2 = vx * vx + vy * vy
+        t = 0.0 if L2 < 1e-12 else max(0.0, min(1.0, (wx * vx + wy * vy) / L2))
+        return math.hypot(px - (ax + t * vx), py - (ay + t * vy))
+
+    def _self_risk_of_path(self, pos, path):
+        """第一次反弹后，路径离自己车体中心的最小距离（米）。无风险 → 999。"""
+        if not path or len(path) < 3 or pos is None:
+            return 999.0
+        best = 999.0
+        # path[0]=起点、path[1]=第一次反弹点；deadlyToOwner 从 path[1] 之后生效
+        for i in range(1, len(path) - 1):
+            a, b = path[i], path[i + 1]
+            d = self._seg_dist(pos[0], pos[1], a['x'], a['y'], b['x'], b['y'])
+            if d < best:
+                best = d
+        return best
+
     async def raycast(self, pid, world_angle_rad, max_traveled=None, max_bounces=None):
-        """沿世界方向角推演**官方弹道**（B2DUtils，从炮口起算）。
+        """官方弹道推演（从炮口起算）。
 
         返回 ``{angle_rad, path, bounces, traveled, hit, hit_pid, self_hit,
-        self_hit_harmless, reachable}``：
-        * ``hit``：是否命中某辆坦克（且射程内）
-        * ``hit_pid``：第一个被命中的坦克（无则 None）
-        * ``self_hit``：命中自己且 bounces≥1（deadlyToOwner 已翻转 → 真自伤）
-        * ``self_hit_harmless``：0 反弹命中自己（会穿透，无害）
-        * ``reachable``：traveled ≤ 射程；未命中时 ``traveled`` 截断到射程
+        self_hit_harmless, self_risk, self_risk_ok, reachable}``。
         """
         await self._require(pid)
         pos = await self.bhv.get_position(pid)
@@ -382,38 +398,35 @@ class Kit:
             pos[0], pos[1], math.degrees(float(world_angle_rad)), 0.0, 0.0,
             max_bounces=max(1, cap), max_dist=float(max_traveled) * 1.5,
             target_tank_id=None, origin_offset=off)
-        return self._mk_ray(pid, world_angle_rad, d, float(max_traveled))
+        return self._mk_ray(pid, world_angle_rad, d, float(max_traveled), pos)
 
-    @staticmethod
-    def _mk_ray(pid, angle_rad, d, max_traveled):
+    def _mk_ray(self, pid, angle_rad, d, max_traveled, pos=None):
         nb = int(d.get('bounces') or 0)
         traveled = float(d.get('traveled') or 0)
         reach = traveled <= max_traveled
         raw_hit = d.get('hitTank')
         hit = bool(raw_hit) and reach
         self_pid = str(raw_hit) == str(pid)
+        path = d.get('path') or []
+        risk = self._self_risk_of_path(pos, path)
         return {'angle_rad': float(angle_rad),
-                'path': d.get('path') or [],
+                'path': path,
                 'bounces': nb,
                 'traveled': traveled if reach else max_traveled,
                 'hit': bool(hit),
                 'hit_pid': raw_hit if hit else None,
                 'self_hit': bool(hit and self_pid and nb >= 1),
                 'self_hit_harmless': bool(hit and self_pid and nb == 0),
+                'self_risk': float(risk),
+                'self_risk_ok': bool(risk >= SELF_RISK_RADIUS),
                 'reachable': reach}
 
     async def scan(self, pid, step_deg=30, max_traveled=None, robust_deg=None):
-        """**静默扫描 360°**：每个方向角取官方弹道第一个命中的坦克。
+        """静默扫描 360°：每项含 ``hit_pid/self_hit/bounces/traveled/robust/quality/
+        path/self_risk/self_risk_ok``。
 
-        ``robust_deg``：给出时（如 1.5），对"命中对手"的候选额外检查 ±robust_deg
-        是否仍命中同一对手（转向误差 ±1~2°，只有鲁棒解可靠）。
-
-        返回每项::
-
-            {'angle_rad','hit_pid','self_hit','self_hit_harmless',
-             'bounces','traveled','reachable','robust','quality'}
-
-        ``quality`` 越小越好（= traveled + 30×bounces；短距/少反弹最可靠）。
+        ``quality = traveled + 30×bounces``（越小越可靠）。
+        ``self_risk < 4m`` 表示反弹后路径贴近自己 → 有自伤风险。
         """
         await self._require(pid)
         pos = await self.bhv.get_position(pid)
@@ -428,7 +441,7 @@ class Kit:
                 pos[0], pos[1], float(deg), 0.0, 0.0,
                 max_bounces=MAX_PATH_BOUNCES, max_dist=float(max_traveled) * 1.5,
                 target_tank_id=None, origin_offset=off)
-            item = self._mk_ray(pid, math.radians(deg), d, float(max_traveled))
+            item = self._mk_ray(pid, math.radians(deg), d, float(max_traveled), pos)
             item['robust'] = None
             if robust_deg and item['hit_pid'] and not item['self_hit']:
                 ok = True
@@ -437,7 +450,7 @@ class Kit:
                         pos[0], pos[1], float(deg) + delta, 0.0, 0.0,
                         max_bounces=MAX_PATH_BOUNCES, max_dist=float(max_traveled) * 1.5,
                         target_tank_id=None, origin_offset=off)
-                    it2 = self._mk_ray(pid, math.radians(deg + delta), d2, float(max_traveled))
+                    it2 = self._mk_ray(pid, math.radians(deg + delta), d2, float(max_traveled), pos)
                     if not (it2['hit_pid'] and str(it2['hit_pid']) == str(item['hit_pid'])
                             and not it2['self_hit']):
                         ok = False
@@ -447,9 +460,34 @@ class Kit:
             out.append(item)
         return out
 
+    def is_good_candidate(self, item, pid, target_id=None):
+        """候选是否"可安全开火"：命中对手、不自伤、无自伤风险。"""
+        if not item or not item.get('hit_pid'):
+            return False
+        if str(item['hit_pid']) == str(pid):
+            return False
+        if target_id is not None and str(item['hit_pid']) != str(target_id):
+            return False
+        return bool(not item.get('self_hit') and item.get('self_risk_ok', True))
+
+    async def scan_adaptive(self, pid, target_id=None, steps=(30, 10, 5, 2),
+                            robust_deg=None):
+        """粗→细自适应扫描：依次用 steps 扫描，一旦找到安全候选就返回。
+
+        返回 ``(candidates, used_steps)``；候选已按 quality 升序。
+        """
+        used = []
+        for st in steps:
+            used.append(int(st))
+            res = await self.scan(pid, step_deg=st, robust_deg=robust_deg)
+            cands = [r for r in res if self.is_good_candidate(r, pid, target_id)]
+            if cands:
+                cands.sort(key=lambda r: r['quality'])
+                return cands, used
+        return [], used
+
     async def find_aim(self, pid, target_xy, target_id=None, require_bounce=False,
                        max_traveled=None, max_bounces=None):
-        """找能命中目标的**世界方向角**（官方弹道，自动排除先打自己的解）。"""
         await self._require(pid)
         off = float(MUZZLE_OFFSET.get(int(await self.weapon(pid)), 2.50))
         if max_traveled is None:
@@ -460,11 +498,13 @@ class Kit:
             max_traveled=float(max_traveled), max_bounces=cap, muzzle_offset=off)
 
     async def aim_and_fire(self, pid, target_xy, target_id=None, fire_sec=0.6,
-                           tol_deg=1.2, robust_deg=1.5, max_attempts=3):
-        """转向 + **在实际朝向上复核弹道**（含鲁棒性检查），通过才开火。
+                           tol_deg=1.8, robust_deg=None, self_risk_ok=True, max_attempts=3):
+        """转向 + 在实际朝向复核弹道（含自伤风险检查）→ 通过才开火。
+
+        v3 默认**不做** ±robust_deg 邻域检查（窄窗口图上会永不开火），
+        但默认要求 `self_risk_ok`（反弹后路径不贴近自己）。
 
         返回 ``{'fired','reason','angle_deg','verify','attempt'}``。
-        ``reason``: ``no_aim`` / ``no_pose`` / ``verify_failed`` / None(成功)。
         """
         await self._require(pid)
         for attempt in range(1, int(max_attempts) + 1):
@@ -481,6 +521,8 @@ class Kit:
             v = await self.raycast(pid, actual)
             ok = bool(v and v.get('hit') and str(v.get('hit_pid')) == str(target_id)
                       and not v.get('self_hit'))
+            if ok and self_risk_ok and not v.get('self_risk_ok', True):
+                ok = False
             if ok and robust_deg:
                 for delta in (float(robust_deg), -float(robust_deg)):
                     s = await self.raycast(pid, actual + math.radians(delta))
@@ -489,7 +531,7 @@ class Kit:
                         ok = False
                         break
             if not ok:
-                continue                     # 复核失败 → 重新找角/换解
+                continue
             await self.fire(pid, fire_sec)
             return {'fired': True, 'reason': None, 'angle_deg': math.degrees(actual),
                     'verify': v, 'attempt': attempt}
