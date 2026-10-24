@@ -48,19 +48,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 #         GATLING_GUN {RADIUS:0.1, OFFSET:3.0, SPEED:25~30, BULLET_SPREAD:0.1}
 #         DOUBLE_BARREL {RADIUS:0.25, OFFSET:2.25, SPEED:18, SPACE:0.45}
 #         MINE {RADIUS:0.8, LAUNCH_SPEED:12.5, MIN_SPEED:25}
-#   全局规则：PROJECTILE_BOUNCE_TIMEOUT_COUNT=5（**弹丸最多反弹 5 次即消亡**）、WINDOW=35s
+#   全局规则（2026-10-24 游戏内实测修正）：**弹丸只在存活时间到限时消亡**；
+#   名义上的 PROJECTILE_BOUNCE_TIMEOUT_COUNT=5 / WINDOW=35 实际不生效
+#   （WINDOW 被当毫秒用 → 反弹计数 35ms 就清空；玩家实测窄通道可反弹 10~20 次）。
+#   推演只按 max_dist = 弹速 × 寿命 限制。
 WEAPONS = {
     'bullet':        {'speed': 18.0,  'lifetime': 10.0, 'fire_delay_ms': None, 'charge_ms': 0,
                       'spread_deg': 0.0, 'ammo': 5, 'radius': 0.25, 'muzzle_offset': 2.50,
-                      'bounces_max': 5,
+                      'bounces_max': None,   # 无实际上限（生存时间才是上限）
                       'notes': '基础弹；半径 0.25m（运行时 p2 circle 实测一致）、炮口 2.5m、'
-                               '弹仓 5、寿命 10s、反弹上限 5；实测偏差恒 0.00°'},
+                               '弹仓 5、寿命 10s（射程 180m）、反弹无实际上限；实测偏差恒 0.00°'},
     'laser':         {'speed': 180.0, 'lifetime': 0.8,  'fire_delay_ms': 9.8,  'charge_ms': 0,
                       'spread_deg': 0.0, 'ammo': 1, 'radius': 0.0, 'muzzle_offset': 2.50,
                       'notes': '半径 **0**（零宽射线，无碰撞半径）、炮口 2.5m；实测 180m/s、0.8s、1 发、无蓄力'},
     'double_barrel': {'speed': 18.0,  'lifetime': 6.0,  'fire_delay_ms': 9.0,  'charge_ms': 0,
                       'spread_deg': 0.0, 'ammo': 10, 'radius': 0.25, 'muzzle_offset': 2.25,
-                      'bounces_max': 5, 'space_m': 0.45,
+                      'bounces_max': None,   # 无实际上限（生存时间才是上限）
+                      'space_m': 0.45,
                       'notes': '★ 实测：一次扳机只出 **1 发**；半径 0.25m、炮口 **2.25m**、弹速 18.0、'
                                '**寿命 6s**（官方 DOUBLE_BARREL_MAX_LIFETIME=6.0，运行时实测 lifetime 恒为 6）、'
                                '偏差恒 0.00°、出膛延迟 6.9~9.8ms、弹仓 10、无蓄力'},
@@ -90,7 +94,7 @@ WEAPONS = {
     # 加特林：★ 2026-10-02 用"武器内部状态逐帧采样"精确标定（不再靠数弹丸）
     'gatling_gun':   {'speed': 27.0,  'lifetime': 2.0,  'fire_delay_ms': None, 'charge_ms': 486,
                       'spread_deg': 1.6, 'ammo': 20, 'fire_interval_ms': 119,
-                      'radius': 0.10, 'muzzle_offset': 3.00, 'space_m': 0.40, 'bounces_max': 5,
+                      'radius': 0.10, 'muzzle_offset': 3.00, 'space_m': 0.40, 'bounces_max': None,   # 无实际上限（生存时间才是上限）
                       'notes': '★ 精确实测：蓄力 486ms（`GATLING_GUN_CHARGE_TIME`）、'
                                '射速 119ms/发、弹仓 20、打空切回基础弹；'
                                '**寿命 2s（常数 GATLING_GUN_MAX_LIFETIME=2）→ 射程≈54m，不是 10s**；'
