@@ -86,6 +86,8 @@ def _wrap_pi(a):
 MAX_PATH_BOUNCES = 100
 # 反弹后路径离自己多近算"自伤风险"（米）。实测预测偏差可达 16m，取 4m 保守。
 SELF_RISK_RADIUS = 4.0
+# 转向量子：5 rad/s / 60fps = 4.775 度/帧。转角只能是 起始角 + k*量子 的网格。
+TURN_QUANTUM_DEG = 4.775
 
 
 class Kit:
@@ -275,8 +277,21 @@ class Kit:
             raw = json.loads(await self.ctl.cdp.eval(js))
             if not raw:
                 return None
-            for e in raw:
-                if e.get('playerId') is not None and str(e['playerId']) == str(pid):
+            weapon = await self.weapon(pid)
+            cands = [e for e in raw
+                     if e.get('playerId') is not None and str(e['playerId']) == str(pid)]
+            if not cands:
+                return None
+            pick = None
+            if weapon is not None:
+                for e in cands:
+                    if e.get('type') is not None and int(e['type']) == int(weapon):
+                        pick = e
+                        break
+            if pick is None:
+                pick = cands[0]
+            for e in [pick]:
+                if True:
                     left = e.get('bulletCount')
                     fired = e.get('bulletsFired')
                     remain = None
@@ -286,7 +301,7 @@ class Kit:
                     except Exception:
                         remain = None
                     return {'left': left, 'fired': fired, 'remaining': remain,
-                            'weapon': await self.weapon(pid)}
+                            'weapon': weapon, 'type': e.get('type')}
             return None
         except Exception:
             return None
@@ -493,6 +508,29 @@ class Kit:
             except Exception:
                 pass
 
+    def snap_angle_deg(self, ang_deg, quantum_deg=TURN_QUANTUM_DEG):
+        """把世界方向角(度)吸附到最近的可达角（转向量子网格）。"""
+        q = float(quantum_deg)
+        return round(float(ang_deg) / q) * q
+
+    async def snap_angle(self, pid, world_angle_rad, quantum_deg=TURN_QUANTUM_DEG):
+        """把世界方向角(弧度)吸附到「从当前 rot 出发可达」的最近网格角。
+
+        返回 ``{'angle_rad','angle_deg','offset_deg'}``（offset 是吸附偏移）。
+        转向量子约 4.775 度：2~9 度的小修正不可达，必须先吸附再复核。
+        """
+        await self._require(pid)
+        cur = await self.rotation(pid)
+        if cur is None:
+            return {'angle_rad': float(world_angle_rad),
+                    'angle_deg': math.degrees(world_angle_rad), 'offset_deg': 0.0}
+        q = math.radians(float(quantum_deg))
+        cur_world = _wrap_pi(cur - math.pi / 2)
+        delta = _wrap_pi(float(world_angle_rad) - cur_world)
+        snapped = cur_world + round(delta / q) * q
+        return {'angle_rad': snapped, 'angle_deg': math.degrees(snapped),
+                'offset_deg': math.degrees(_wrap_pi(snapped - float(world_angle_rad)))}
+
     async def turn_precise(self, pid, world_angle_rad, tol_deg=0.8, lead_deg=1.2,
                            max_rounds=6, timeout=6.0):
         """**连续按住 + 高频读 rot + 提前释放 + 过冲补偿**的精准转向。
@@ -612,10 +650,11 @@ class Kit:
                     'best_err_deg': None, 'final_err_deg': None}
         ok = abs(ue) <= tol + math.radians(1.0)
         return {'ok': bool(ok),
-                'actual_deg': math.degrees(use - math.pi / 2),
+                'actual_deg': math.degrees(_wrap_pi(use - math.pi / 2)),
                 'err_deg': -math.degrees(ue),
                 'best_err_deg': math.degrees(best[0]) if best else None,
-                'final_err_deg': math.degrees(ue)}
+                'final_err_deg': math.degrees(ue),
+                'fallback': True}
 
     async def navigate_to(self, pid, target_xy, arrival=1.5, timeout=None):
         await self._require(pid)
@@ -643,7 +682,7 @@ class Kit:
         return {'arrived': bool(arrived), 'pos': pos, 'from': start, 'dist': dist,
                 'moved': moved, 'elapsed': round(_t.time() - t0, 2)}
 
-    async def navigate_segment(self, pid, target_xy, max_seconds=3.0, arrival=1.5):
+    async def navigate_segment(self, pid, target_xy, max_seconds=2.2, arrival=1.5):
         """有界单段寻路：最多走 max_seconds 秒（超时取消并松键），返回结果字典。"""
         return await self.navigate_to_ex(pid, target_xy, arrival=arrival,
                                          timeout=float(max_seconds))
@@ -833,6 +872,8 @@ class Kit:
         tv = float(item.get('traveled') or 0)
         risk = float(item.get('self_risk') or 0.0)
         need = float(pol['risk_long']) if (nb >= int(pol['long_bounces']) or tv >= float(pol['long_traveled'])) else float(pol['risk_short'])
+        # v7: 多反弹/长行程的自伤阈值随几何放大（实测 3 反弹 97m risk=5.2 仍被自己跳弹打死）
+        need = max(need, 4.0 + 0.6 * nb + 0.03 * tv)
         if risk < need:
             return None
         if nb > int(pol['max_bounces']) or tv > float(pol['max_traveled']):
@@ -886,10 +927,41 @@ class Kit:
             pid, tuple(target_xy), target_id=target_id, require_bounce=require_bounce,
             max_traveled=float(max_traveled), max_bounces=cap, muzzle_offset=off)
 
+    async def scan_region(self, pid, center_deg, span_deg=20.0, step_deg=0.5,
+                          target_id=None, profile=None):
+        """在指定角度区域细扫（0.5 度级），返回命中候选（按 quality 升序）。
+
+        用于 scan_adaptive 的 2 度网格漏掉 0.5~1 度窄窗口的情况。
+        """
+        await self._require(pid)
+        pos = await self.bhv.get_position(pid)
+        if pos is None:
+            return []
+        off = self._muzzle(await self.weapon(pid))
+        rng = await self.bullet_range(pid)
+        profs = ([profile] if profile else ['strict', 'relaxed', 'loose'])
+        out = []
+        n = max(1, int(round(float(span_deg) / float(step_deg))))
+        for k in range(-n, n + 1):
+            deg = float(center_deg) + k * float(step_deg)
+            d = await self.bhv._raycast_path(
+                pos[0], pos[1], deg, 0.0, 0.0,
+                max_bounces=MAX_PATH_BOUNCES, max_dist=rng * 1.5,
+                target_tank_id=None, origin_offset=off)
+            it = self._mk_ray(pid, math.radians(deg), d, rng, pos)
+            for prof in profs:
+                if self.is_good_candidate(it, pid, target_id, profile=prof):
+                    it['tier'] = prof
+                    out.append(it)
+                    break
+        out.sort(key=lambda r: r['quality'])
+        return out
+
     async def fine_aim(self, pid, target_id, center_rad, span_deg=10.0, step_deg=0.25,
                        profile=None, max_bounces=None, max_traveled=None,
                        min_self_risk=None, prefer='window_center',
-                       ref_bounces=None, ref_traveled=None, same_family=True):
+                       ref_bounces=None, ref_traveled=None, same_family=True,
+                       snap=True):
         """在 ``center_rad`` ±span_deg 内细采样，找**命中窗口**并返回窗口中心角。
 
         v5：不再返回"离中心最近的角"（窗口 1~3°、瞄准误差 1~2°，瞄边缘≈瞄外面），
@@ -965,6 +1037,21 @@ class Kit:
             target_tank_id=None, origin_offset=off)
         it = self._mk_ray(pid, ang, d, rng, pos)
         it['window'] = float((max(ks) - min(ks) + 1) * float(step_deg))
+        it['window_center_deg'] = math.degrees(ang)
+        if snap:
+            sn = await self.snap_angle(pid, ang)
+            it['snapped_deg'] = sn['angle_deg']
+            it['snap_offset_deg'] = sn['offset_deg']
+            d2 = await self.bhv._raycast_path(
+                pos[0], pos[1], sn['angle_deg'], 0.0, 0.0,
+                max_bounces=MAX_PATH_BOUNCES, max_dist=rng * 1.5,
+                target_tank_id=None, origin_offset=off)
+            it2 = self._mk_ray(pid, sn['angle_rad'], d2, rng, pos)
+            it2['window'] = it['window']
+            it2['snapped_deg'] = sn['angle_deg']
+            it2['snap_offset_deg'] = sn['offset_deg']
+            it2['window_center_deg'] = it['window_center_deg']
+            return it2
         return it
 
     async def aim_and_fire(self, pid, target_xy, target_id=None, fire_sec=0.6,
