@@ -32,7 +32,7 @@ import os
 import sys
 import time
 
-BB = os.environ.get('TT_BB_DIR') or r'D:\AI Agent\tt_bb_lowlevel2'
+BB = os.environ.get('TT_BB_DIR') or r'D:\AI Agent\tt_bb_lowlevel4'
 if BB not in sys.path:
     sys.path.insert(0, BB)
 
@@ -140,6 +140,38 @@ async def main():
         age = p.round_age_ms(st)
         print('  round_age_ms =', age)
         ok &= isinstance(age, (int, float))
+
+        print('== 11) v4 原语（第三轮报告修复）==')
+        sim0 = p.simulate_shot(me, 0.0, st, max_bounces=0, ignore_self=True)
+        sim1 = p.simulate_shot(me, 0.0, st, max_bounces=1, ignore_self=True)
+        print('  sim mb0: b=%s trunc=%s | mb1: b=%s trunc=%s'
+              % (sim0.get('bounces'), sim0.get('truncated'),
+                 sim1.get('bounces'), sim1.get('truncated')))
+        ok &= sim0.get('bounces') == 0 and (sim1.get('bounces') or 0) <= 1
+        ok &= 'complete' in sim1 and 'truncated' in sim1
+        simr = p.simulate_shot(me, 0.0, st, from_rot=(t.get('rot') or 0.0),
+                               ignore_self=True)
+        print('  from_rot/ignore_self: hitTank=%r（不应为自己）' % simr.get('hitTank'))
+        ok &= simr.get('hitTank') != me
+        simt = p.simulate_shot(me, 0.0, st, ignore_tanks=True)
+        print('  ignore_tanks=True: hitTank=%r' % simt.get('hitTank'))
+        ok &= simt.get('hitTank') is None
+        obb = p.tank_obb(me, st, radius=0.25)
+        print('  tank_obb: half=%.2fx%.2f corners=%d' % (obb['half_len'], obb['half_wid'],
+                                                         len(obb['corners'])))
+        ok &= len(obb['corners']) == 4
+        batch_sim = p.simulate_shots(me, [0, 90, 180, 270], st, max_bounces=1)
+        print('  simulate_shots: n=%d' % len(batch_sim))
+        ok &= len(batch_sim) == 4
+        merged = p.walls_unique([{'x1': 0, 'y1': 0, 'x2': 10, 'y2': 0},
+                                 {'x1': 10, 'y1': 0, 'x2': 20, 'y2': 0}],
+                                merge_collinear=True)
+        print('  walls_unique(merge): %d 段（2 段合并为 1）' % len(merged))
+        ok &= len(merged) == 1
+        inp_alias = await p.input_state(me)
+        print('  input_state 别名: forward=%r fwd=%r' % (inp_alias.get('forward'),
+                                                          inp_alias.get('fwd')))
+        ok &= inp_alias.get('forward') == inp_alias.get('fwd')
 
         print('\n结论:', '✅ PASS' if ok else '❌ FAIL')
         return 0 if ok else 1
