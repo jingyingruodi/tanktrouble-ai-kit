@@ -38,15 +38,12 @@ from gameutils import wrap_pi
 
 async def main():
     args = sys.argv[1:]
-    # 支持 auto：自动发现 dsh-ego-browser 的动态 CDP 端口（见 cdp_tools/ego_browser.py）
-    if len(args) > 0 and args[0] == 'auto':
-        _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cdp_tools')
-        if _p not in sys.path:
-            sys.path.insert(0, _p)
-        from ego_browser import resolve_port
-        port = resolve_port('auto')
-    else:
-        port = int(args[0]) if len(args) > 0 and args[0].isdigit() else 9222
+    # 支持 auto / TT_CDP_PORT：统一解析（见 cdp_tools/port_arg.py）
+    _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cdp_tools')
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+    from port_arg import port_from_args  # noqa: E402
+    port = port_from_args(args)
 
     bhv = TankBehavior(port=port)
     await bhv.connect()

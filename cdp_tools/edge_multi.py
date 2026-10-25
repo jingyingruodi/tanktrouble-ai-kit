@@ -33,11 +33,14 @@ import json
 import subprocess
 import asyncio
 
-from platform_utils import find_browser, profile_base  # noqa: E402
+try:  # 包内导入（python -m cdp_tools.edge_multi）
+    from .platform_utils import find_browser, profile_base, no_sandbox_flags
+except ImportError:  # 脚本目录直接导入（python edge_multi.py）
+    from platform_utils import find_browser, profile_base, no_sandbox_flags
 
 EDGE = find_browser()
 PROFILE_BASE = profile_base()
-PORT_BASE = 9222
+PORT_BASE = int(os.environ.get('TT_FARM_PORT_BASE', '9222'))
 
 class EdgeInstance:
     def __init__(self, index, port, profile_dir):
@@ -48,7 +51,9 @@ class EdgeInstance:
         self.cdp = None  # 惰性导入：在 get_cdp 里 import cdp，避免循环依赖
 
     def launch(self):
-        """在该实例端口上启动带 CDP 的 Edge。"""
+        """在该实例端口上启动带 CDP 的浏览器。"""
+        if not EDGE:
+            raise RuntimeError('未找到 Edge/Chrome/Chromium；请设置 TT_BROWSER')
         os.makedirs(self.profile_dir, exist_ok=True)
         args = [
             f'--remote-debugging-port={self.port}',
@@ -56,6 +61,7 @@ class EdgeInstance:
             '--no-first-run',
             '--no-default-browser-check',
             '--new-window',
+            *no_sandbox_flags(),
             'about:blank',
         ]
         self.proc = subprocess.Popen([EDGE] + args)
@@ -70,11 +76,14 @@ class EdgeInstance:
         raise RuntimeError(f'Instance {self.index}: CDP not ready on port {self.port}')
 
     def is_ready(self):
-        try:
-            with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/json/version', timeout=2) as r:
-                return True
-        except Exception:
-            return False
+        for host in ('127.0.0.1', '[::1]', 'localhost'):
+            try:
+                with urllib.request.urlopen(
+                        f'http://{host}:{self.port}/json/version', timeout=2) as r:
+                    return True
+            except Exception:
+                continue
+        return False
 
     def get_cdp(self):
         """返回已连接的 CDP 句柄（惰性 import cdp 模块）。"""
@@ -96,7 +105,7 @@ class EdgeFarm:
             self.instances.append(EdgeInstance(
                 index=i,
                 port=PORT_BASE + i,
-                profile_dir=f'{PROFILE_BASE}-{i}',
+                profile_dir=os.path.join(PROFILE_BASE, str(i)),
             ))
 
     def launch_all(self):
@@ -119,11 +128,14 @@ class EdgeFarm:
 
     @staticmethod
     def is_instance_running(port):
-        try:
-            with urllib.request.urlopen(f'http://127.0.0.1:{port}/json/version', timeout=2):
-                return True
-        except Exception:
-            return False
+        for host in ('127.0.0.1', '[::1]', 'localhost'):
+            try:
+                with urllib.request.urlopen(
+                        f'http://{host}:{port}/json/version', timeout=2):
+                    return True
+            except Exception:
+                continue
+        return False
 
 
 if __name__ == '__main__':
@@ -134,6 +146,9 @@ if __name__ == '__main__':
         farm.launch_all()
         print(f'[{n}] instances running. Ports: {[i.port for i in farm.instances]}')
     finally:
-        # 想保持常驻就注释掉下面这行
-        input('Press Enter to close all instances...')
+        # 想保持常驻就注释掉下面三行（非交互环境不会因 EOFError 泄漏浏览器）
+        try:
+            input('Press Enter to close all instances...')
+        except EOFError:
+            pass
         farm.close_all()

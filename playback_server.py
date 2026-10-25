@@ -20,7 +20,7 @@ useful for verifying the recorder, and for diagnosing past sessions.
 Usage:
   python playback_server.py <recording.jsonl> [ws_port] [--fps N] [--loop]
 Examples:
-  python playback_server.py C:\\tt-cdp-0\\suicide_v4b.jsonl 9314 --fps 20
+  python playback_server.py recordings/demo.jsonl 9314 --fps 20
     -> replay on ws://localhost:9314 (the "replay instance" in the monitor room)
   python playback_server.py data.jsonl 9315 --fps 30 --loop
 """
@@ -140,4 +140,4 @@ async def main():
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

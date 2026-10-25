@@ -11,8 +11,8 @@
 """
 重启监控室辅助：杀掉残留的 monitor_server / playback_server 进程。
 
-跨平台（Linux / macOS / Windows）：进程列表与终止都走 ``cdp_tools/platform_utils.py``。
-只杀监控相关，保留自杀/录制等其它 python 进程。
+跨平台（Linux / macOS / Windows）；**按 argv 中的脚本文件名精确匹配**，
+不会因为命令行里恰好出现 "monitor_server" 子串而误杀编辑器/日志/包装 shell。
 
 用法：python scripts/kill_monitor.py [--all]
   --all  额外把 selftest_monitor / mover_harness 也杀掉（默认不动）
@@ -23,22 +23,27 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'cdp_tools'))
 
-from platform_utils import list_python_processes, terminate  # noqa: E402
+from platform_utils import list_processes, terminate, script_token_match  # noqa: E402
 
-PATTERNS = ['monitor_server', 'playback_server']
-PATTERNS_ALL = PATTERNS + ['selftest_monitor', 'mover_harness']
+NAMES = ('monitor_server.py', 'playback_server.py')
+NAMES_ALL = NAMES + ('selftest_monitor.py', 'mover_harness.py')
 
 
 def main():
-    pats = PATTERNS_ALL if '--all' in sys.argv else PATTERNS
-    procs = list_python_processes()
-    targets = [(pid, cmd) for pid, cmd in procs
-               if any(p in cmd for p in pats) and 'kill_monitor' not in cmd]
+    names = NAMES_ALL if '--all' in sys.argv else NAMES
+    procs = list_processes()
+    if procs is None:
+        print('[kill] ⚠️ 无法枚举进程（ps/PowerShell 不可用），请手动检查', flush=True)
+        return 2
+    me = os.getpid()
+    targets = [(pid, argv) for pid, argv in procs
+               if pid != me and script_token_match(argv, names)]
     if not targets:
         print('[kill] 无残留监控进程', flush=True)
         return 0
     killed = []
-    for pid, cmd in targets:
+    for pid, argv in targets:
+        cmd = ' '.join(argv)
         print('[kill] 终止 PID %d: %s' % (pid, cmd.strip()[:90]), flush=True)
         if terminate(pid):
             killed.append(pid)

@@ -39,13 +39,15 @@ sys.path.insert(0, os.path.join(ROOT, 'cdp_tools'))
 from ego_browser import resolve_port  # noqa: E402
 
 
-def wait_port(port, timeout=15.0):
+def port_open(port, timeout=15.0):
+    """TCP 探测端口（WebSocket 端口不能用 HTTP GET 探测）。"""
+    import socket
     t0 = time.time()
     while time.time() - t0 < timeout:
         try:
-            with urllib.request.urlopen('http://127.0.0.1:%d' % port, timeout=1):
+            with socket.create_connection(('127.0.0.1', port), timeout=1):
                 return True
-        except Exception:
+        except OSError:
             time.sleep(0.3)
     return False
 
@@ -74,11 +76,20 @@ def main():
     proc = {}
     ok = True
 
+    # 先清理上一轮残留（否则 9310/9316 被占会导致误判）
+    try:
+        subprocess.run([sys.executable, os.path.join(HERE, 'kill_monitor.py')],
+                       cwd=ROOT, capture_output=True, timeout=60)
+    except Exception:
+        pass
+
     print('[1/5] CDP 端口 auto -> %d' % cdp, flush=True)
     print('[2/5] 启动 monitor_server ...', flush=True)
     proc['monitor'] = start([sys.executable, os.path.join(ROOT, 'monitor_server.py'),
                              '1', 'auto'])
-    time.sleep(2.5)
+    if not port_open(9310, timeout=15):
+        print('     ❌ monitor_server 未监听 9310（启动失败，见其输出）', flush=True)
+        ok = False
     try:
         frames = asyncio.run(ws_read(9310, 5))
         tanks = [(f.get('data') or {}).get('tanks') or {} for f in frames]
@@ -91,7 +102,9 @@ def main():
         print('     ❌ WS 9310 失败: %s: %s' % (type(e).__name__, e), flush=True)
         ok = False
 
-    out = os.path.join(ROOT, 'scripts', 'scratch', 'selftest_rec.jsonl')
+    scratch = os.path.join(ROOT, 'scripts', 'scratch')
+    os.makedirs(scratch, exist_ok=True)
+    out = os.path.join(scratch, 'selftest_rec.jsonl')
     print('[3/5] 录制 4s -> %s' % out, flush=True)
     try:
         r = subprocess.run([sys.executable, os.path.join(HERE, 'record_only.py'), 'auto',
@@ -109,7 +122,9 @@ def main():
     print('[4/5] 回放（9316）...', flush=True)
     proc['playback'] = start([sys.executable, os.path.join(ROOT, 'playback_server.py'),
                               out, '9316', '--fps', '15'])
-    time.sleep(2.0)
+    if not port_open(9316, timeout=15):
+        print('     ❌ playback_server 未监听 9316', flush=True)
+        ok = False
     try:
         rframes = asyncio.run(ws_read(9316, 5))
         rtanks = [(f.get('data') or {}).get('tanks') or {} for f in rframes]

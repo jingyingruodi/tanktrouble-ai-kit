@@ -27,7 +27,7 @@ kit/               封装包 ttkit（对外 API；见 kit/README.md）
 examples/          行为 AI 示例（agent_ai.py）
 cdp_tools/         CDP 连接、输入控制、弹道、地形、常量
 scripts/           实测/验证脚本（弹道、武器、毒圈、地雷、控制测试等）
-docs/              研究文档 01–18（含 11 轮黑盒测试记录）
+docs/              研究文档 01–21（含 Linux 审查报告与 11 轮黑盒测试记录）
 rl/                观测/动作/数据集雏形（未训练）
 ```
 
@@ -35,11 +35,20 @@ rl/                观测/动作/数据集雏形（未训练）
 
 前置：Python 3.10+、Chrome/Edge、TankTrouble 网页；以 `--remote-debugging-port` 启动浏览器。
 
-```bash
-pip install -r requirements.txt
+**Windows**
+```powershell
+python -m pip install -r requirements.txt
 python scripts/start_local_game.py auto --players 2 --restart   # 本地双人对局
-cd kit && python -c "import asyncio; from ttkit import Kit; ..." # 见 kit/README.md
 ```
+
+**Linux / macOS**
+```bash
+./setup-linux.sh                                                 # 建 .venv + 装依赖 + 探测浏览器
+./launch-browser.sh 9222                                         # 带 CDP 启动并打开游戏
+python3 scripts/start_local_game.py auto --players 2 --restart
+```
+
+API 用法见 [kit/README.md](kit/README.md)。
 
 > 在线房间相关脚本仅用于**受控自建房间**的研究；请勿在公开对局使用。
 
@@ -58,6 +67,7 @@ cd kit && python -c "import asyncio; from ttkit import Kit; ..." # 见 kit/READM
 ## 监控室 / 录制 / 回放
 
 ```bash
+python launch_cdp.py --check                        # 先检查浏览器/路径（不启动）
 python monitor_server.py 1 auto                     # 监控室数据源（WS 9310+，auto 端口）
 python scripts/selftest_monitor.py                  # 全链路自检：监控→录制→回放→清理
 python scripts/record_only.py auto --out data/demo.jsonl --fps 20 --compress
@@ -72,9 +82,11 @@ bat 快捷入口使用 `%~dp0` 相对路径，可移植。
 
 ## Linux 支持
 
-跨平台已适配（Windows / macOS / Linux）：浏览器自动探测、profile 目录按平台取
+跨平台适配（Windows / macOS / Linux）：浏览器自动探测、profile 目录按平台取
 （Linux `~/.cache/tt-cdp`）、进程清理跨平台、`TT_BROWSER` / `TT_CDP_PORT` /
 `TT_CDP_PROFILE_BASE` / `TT_CHROME_NO_SANDBOX` 环境变量。
+Linux 分支已在 **Debian 13 实机复检**（[docs/21](docs/21-Linux适配审查-2026-10-25.md)），
+审查提出的 9 条 MAJOR 已修复（[docs/20 §11](docs/20-Linux适配.md)）。
 
 ```bash
 chmod +x setup-linux.sh launch-browser.sh start-monitor.sh kill-monitor.sh
@@ -85,7 +97,8 @@ python3 scripts/selftest_platform.py   # 跨平台自检（应 PASS）
 python3 scripts/selftest_monitor.py    # 监控/录制/回放自检（需游戏在局中）
 ```
 
-无显示器的服务器用 `xvfb-run -s "-screen 0 1280x800x24" python3 launch_cdp.py 9222`。
+无显示器的服务器请用**常驻 Xvfb**：`Xvfb :99 -screen 0 1280x800x24 & export DISPLAY=:99`，
+再 `./launch-browser.sh 9222`（直接用 `xvfb-run` 包 launcher 会在其退出时回收 Xvfb，见 docs/20 §4）。
 详见 [docs/20-Linux适配.md](docs/20-Linux适配.md)。`.bat`/`dev.ps1` 仅 Windows；Linux 用 `.sh`。
 
 ## 许可

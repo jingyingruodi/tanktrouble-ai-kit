@@ -553,6 +553,9 @@ async def main():
             from ego_browser import resolve_port
             base_cdp = resolve_port('auto')
             print(f'[monitor] CDP 端口 auto -> {base_cdp}', flush=True)
+            if cdp_count > 1:
+                print(f'[monitor] ⚠️ auto 发现的是单例浏览器，count={cdp_count} '\
+                      f'时其余实例会离线；如确需多实例请显式给基准端口', flush=True)
         except Exception as e:
             print(f'[monitor] auto 发现失败（{e}），回退 9222', flush=True)
             base_cdp = 9222

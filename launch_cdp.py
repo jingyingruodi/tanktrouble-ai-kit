@@ -9,115 +9,211 @@
 # For education & academic research only. No online public matches. No affiliation.
 # =============================================================================
 """
-TankTrouble CDP Edge Launcher (CDP 启动浏览器窗口)
-====================================================
-Launches an Edge window with remote debugging enabled, then opens a URL.
+TankTrouble CDP 浏览器启动器（Edge / Chrome / Chromium；Windows / macOS / Linux）
+================================================================================
+启动一个带远程调试（CDP）的浏览器窗口并打开指定 URL。
 
-Key features:
-  - Configurable CDP port + profile dir
-  - Opens tanktrouble.com (or any URL)
-  - Anti-freeze: Edge aggressively suspends background/inactive tabs to save
-    memory. For a game tab this stops the game. This launcher:
-      1. opens the URL in a NEW WINDOW (not a background tab)
-      2. adds flags to discourage tab discarding/sleeping
-      3. focuses the new window (via PowerShell) so the tab stays active
+用法：
+    python launch_cdp.py                     # 默认 :9222 打开游戏页
+    python launch_cdp.py 9223                # 指定端口
+    python launch_cdp.py about:blank         # 只开空白页（本地测试/合规）
+    python launch_cdp.py 9222 about:blank
+    python launch_cdp.py --check             # 只检查浏览器/路径/flags，不启动
+    python launch_cdp.py 9222 --hold         # 就绪后保持前台直到浏览器退出
+                                             #（xvfb-run 等场景必须用 --hold）
 
-Usage:
-  python launch_cdp.py [port] [url]
-  python launch_cdp.py 9222
-  python launch_cdp.py 9223 "https://tanktrouble.com/game"
+环境变量：
+    TT_BROWSER              指定浏览器可执行文件
+    TT_CDP_PROFILE_BASE     指定 profile 根目录
+    TT_CHROME_NO_SANDBOX=1  强制 --no-sandbox（Linux root）
+
+安全/健壮性：
+  * 启动后轮询 `/json/version`（IPv4 → IPv6 → localhost），并检查子进程是否还活着；
+    浏览器秒退不会再"假成功"。
+  * 浏览器的 stdio 全部重定向到 DEVNULL，避免 `| tail` / `$(...)` / CI 抓日志时挂住。
+  * 显式指定 TT_BROWSER 时会校验存在性与可执行权限，失败给出明确错误码（2）。
 """
+import argparse
+import json
 import os
 import subprocess
 import sys
 import time
+import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cdp_tools'))
-from platform_utils import find_browser, profile_base, no_sandbox_flags, is_windows  # noqa: E402
+from platform_utils import (  # noqa: E402
+    find_browser, profile_base, no_sandbox_flags, is_windows,
+)
 
-EDGE = find_browser()
-PROFILE_BASE = profile_base()
 PORT_DEFAULT = 9222
-URL_DEFAULT = "https://tanktrouble.com/game"
+URL_DEFAULT = 'https://tanktrouble.com/game'
 
 # 降低游戏标签页冻结 / 后台挂起的 flags。
-#（行为可能随 Edge 版本而异；即使被忽略也无害。）
+# 注意：同一 switch（--disable-features）重复传时后者覆盖前者，必须合并成一条。
 ANTI_FREEZE_FLAGS = [
-    "--disable-backgrounding-occluded-windows",   # 不限制被遮挡的隐藏窗口
-    "--disable-renderer-backgrounding",           # 保持渲染进程活跃
-    "--disable-background-timer-throttling",      # 后台不限制定时器
-    "--disable-features=IntensiveWakeUpThrottling",
-    "--disable-features=CalculateNativeWinOcclusion",
-    "--disable-features=msTabSleeping",           # 关闭 Edge 标签页睡眠
-    "--no-first-run",
-    "--no-default-browser-check",
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-background-timer-throttling',
+    '--disable-features=IntensiveWakeUpThrottling,CalculateNativeWinOcclusion,msTabSleeping',
+    '--no-first-run',
+    '--no-default-browser-check',
 ]
-EXTRA_FLAGS = no_sandbox_flags()   # Linux root 自动 --no-sandbox（或 TT_CHROME_NO_SANDBOX=1）
+
+CDP_HOSTS = ('127.0.0.1', '[::1]', 'localhost')
 
 
-def main():
-    if '--check' in sys.argv:
-        print('[check] platform =', sys.platform)
-        print('[check] browser  =', EDGE)
-        print('[check] exists   =', bool(EDGE and os.path.exists(EDGE)))
-        print('[check] profile  =', PROFILE_BASE)
-        print('[check] flags    =', EXTRA_FLAGS)
-        if not EDGE:
-            print('[check] ❌ 未找到 Edge/Chrome/Chromium；请设置 TT_BROWSER 指向可执行文件')
-            return 2
-        return 0
-    if not EDGE:
-        print('[launch] ❌ 未找到浏览器，请设置 TT_BROWSER（Edge/Chrome/Chromium 路径）', flush=True)
-        return 2
-    port = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else PORT_DEFAULT
-    url = sys.argv[2] if len(sys.argv) > 2 else URL_DEFAULT
-    profile_dir = os.path.join(PROFILE_BASE, f'p{port - 9222}') if port >= 9222 else os.path.join(PROFILE_BASE, f'p{port}')
+def probe_version(port, timeout=2.0):
+    """探测端口的 CDP 版本信息（IPv4/IPv6/localhost 都试）；不可达返回 None。"""
+    for host in CDP_HOSTS:
+        try:
+            with urllib.request.urlopen('http://%s:%d/json/version' % (host, port),
+                                        timeout=timeout) as r:
+                return json.loads(r.read().decode())
+        except Exception:
+            continue
+    return None
 
-    os.makedirs(profile_dir, exist_ok=True)
-    args = [
-        f'--remote-debugging-port={port}',
-        f'--user-data-dir={profile_dir}',
+
+def profile_dir_for(port):
+    """profile 目录：9222..9321 用 p0..p99，其它端口用 p<port>。"""
+    if PORT_DEFAULT <= port < PORT_DEFAULT + 100:
+        name = 'p%d' % (port - PORT_DEFAULT)
+    else:
+        name = 'p%d' % port
+    return os.path.join(profile_base(), name)
+
+
+def _check_browser(path):
+    if not path:
+        return '未找到 Edge/Chrome/Chromium；请设置 TT_BROWSER 指向可执行文件'
+    if not os.path.exists(path):
+        return '浏览器路径不存在: %s' % path
+    if not os.path.isfile(path):
+        return '浏览器路径不是文件: %s' % path
+    if not os.access(path, os.X_OK):
+        return '浏览器文件不可执行: %s' % path
+    return None
+
+
+def build_args(port, url, profile_dir):
+    return [
+        '--remote-debugging-port=%d' % port,
+        '--user-data-dir=%s' % profile_dir,
         *ANTI_FREEZE_FLAGS,
-        *EXTRA_FLAGS,
+        *no_sandbox_flags(),
         '--new-window',
         url,
     ]
-    print(f'[launch] Edge CDP :{port} profile={profile_dir}', flush=True)
-    print(f'[launch] url: {url}', flush=True)
-    subprocess.Popen([EDGE] + args)
 
-    # 等待 CDP 就绪
-    import urllib.request
-    import json
-    ready = False
-    for i in range(40):
-        try:
-            with urllib.request.urlopen(f'http://127.0.0.1:{port}/json/version', timeout=2) as r:
-                info = json.loads(r.read().decode())
-                print(f'[launch] CDP ready on :{port} ({info.get("Browser", "?")})', flush=True)
-                ready = True
-                break
-        except Exception:
-            time.sleep(0.5)
 
-    # 聚焦新 Edge 窗口，让游戏标签页保持 ACTIVE（Edge 会冻结不可见/
-    # 后台标签页 -> 游戏暂停）。把匹配的窗口带到前台。
-    if ready and is_windows():
+def focus_game_window():
+    """Windows：把游戏窗口带到前台（避开 Edge 后台标签页冻结）。"""
+    if not is_windows():
+        return
+    try:
+        ps = ('Add-Type -AssemblyName Microsoft.VisualBasic;'
+              'Add-Type -AssemblyName System.Windows.Forms;'
+              '$p = Get-Process msedge -ErrorAction SilentlyContinue | '
+              "  Where-Object { $_.MainWindowTitle -match 'TankTrouble|game' } | "
+              '  Select-Object -Last 1;'
+              'if ($p) { [Microsoft.VisualBasic.Interaction]::AppActivate($p.Id) }')
+        subprocess.run(['powershell', '-NoProfile', '-Command', ps], timeout=8)
+    except Exception:
+        pass
+
+
+def parse_args(argv):
+    ap = argparse.ArgumentParser(description='启动带 CDP 的浏览器窗口')
+    ap.add_argument('port', nargs='?', default=None,
+                    help='CDP 端口（默认 %d）；也可以只给 URL' % PORT_DEFAULT)
+    ap.add_argument('url', nargs='?', default=None, help='要打开的 URL')
+    ap.add_argument('--check', action='store_true', help='只检查环境，不启动浏览器')
+    ap.add_argument('--hold', action='store_true',
+                    help='就绪后保持前台直到浏览器退出（xvfb-run 场景必需）')
+    ns = ap.parse_args(argv)
+
+    port = PORT_DEFAULT
+    url = URL_DEFAULT
+    if ns.port is not None:
+        if str(ns.port).isdigit():
+            port = int(ns.port)
+            url = ns.url or URL_DEFAULT
+        else:
+            # 第一个位置参数不是数字 → 视为 URL（默认端口）
+            if ns.url:
+                ap.error('端口无效且给出了两个 URL: %r %r' % (ns.port, ns.url))
+            url = ns.port
+    elif ns.url:
+        url = ns.url
+    return ns, port, url
+
+
+def main():
+    opts, port, url = parse_args(sys.argv[1:])
+    browser = find_browser()
+    err = _check_browser(browser)
+    profile_dir = profile_dir_for(port)
+
+    if opts.check:
+        print('[check] platform   =', sys.platform)
+        print('[check] browser    =', browser)
+        print('[check] executable =', bool(browser and os.path.isfile(browser)
+                                          and os.access(browser, os.X_OK)))
+        print('[check] profile    =', profile_dir)
+        print('[check] flags      =', no_sandbox_flags())
+        print('[check] url        =', url)
+        if err:
+            print('[check] ❌', err)
+            return 2
+        print('[check] ✅ 环境可用')
+        return 0
+
+    if err:
+        print('[launch] ❌', err, flush=True)
+        return 2
+
+    os.makedirs(profile_dir, exist_ok=True)
+    args = build_args(port, url, profile_dir)
+    print('[launch] browser=%s' % browser, flush=True)
+    print('[launch] CDP :%d profile=%s url=%s' % (port, profile_dir, url), flush=True)
+
+    popen_kw = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL,
+                'stderr': subprocess.DEVNULL}
+    if not is_windows():
+        popen_kw['start_new_session'] = True
+    proc = subprocess.Popen([browser] + args, **popen_kw)
+
+    # 等待 CDP 就绪：同时检查子进程是否已退出（否则是"假成功"）
+    info = None
+    for _ in range(80):
+        info = probe_version(port, timeout=0.8)
+        if info:
+            break
+        if proc.poll() is not None:
+            print('[launch] ❌ 浏览器提前退出（exit code=%s）' % proc.returncode,
+                  flush=True)
+            return 1
+        time.sleep(0.25)
+    if not info:
+        print('[launch] ❌ CDP 在 %d 上未就绪（浏览器仍在运行: %s）'
+              % (port, proc.poll() is None), flush=True)
+        return 1
+    print('[launch] ✅ CDP ready on :%d (%s)' % (port, info.get('Browser', '?')),
+          flush=True)
+
+    if is_windows():
         time.sleep(1.5)
+        focus_game_window()
+        print('[launch] focused game window', flush=True)
+
+    if opts.hold:
+        print('[launch] --hold：等待浏览器退出 …', flush=True)
         try:
-            ps = (
-                "Add-Type -AssemblyName Microsoft.VisualBasic;"
-                "Add-Type -AssemblyName System.Windows.Forms;"
-                "$p = Get-Process msedge -ErrorAction SilentlyContinue | "
-                "  Where-Object { $_.MainWindowTitle -match 'TankTrouble|game' } | "
-                "  Select-Object -Last 1;"
-                "if ($p) { [Microsoft.VisualBasic.Interaction]::AppActivate($p.Id) }"
-            )
-            subprocess.run(['powershell', '-NoProfile', '-Command', ps], timeout=8)
-            print('[launch] focused game window', flush=True)
-        except Exception:
-            pass
-    return 0 if ready else 1
+            return proc.wait()
+        except KeyboardInterrupt:
+            return 130
+    return 0
 
 
 if __name__ == '__main__':

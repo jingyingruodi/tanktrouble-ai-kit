@@ -88,6 +88,12 @@ def _linux_candidates():
         '/snap/bin/chromium',
         '/opt/google/chrome/chrome',
         '/usr/lib/chromium/chromium',
+        '/var/lib/flatpak/exports/bin/com.google.Chrome',
+        '/var/lib/flatpak/exports/bin/com.microsoft.Edge',
+        '/var/lib/flatpak/exports/bin/org.chromium.Chromium',
+        os.path.expanduser('~/.local/share/flatpak/exports/bin/com.google.Chrome'),
+        os.path.expanduser('~/.local/share/flatpak/exports/bin/com.microsoft.Edge'),
+        os.path.expanduser('~/.local/share/flatpak/exports/bin/org.chromium.Chromium'),
     ]
 
 
@@ -111,9 +117,9 @@ def find_browser(explicit=None, platform=None):
     """
     cand = explicit or os.environ.get('TT_BROWSER')
     if cand:
-        return cand          # 显式指定优先（即使路径暂不存在，交由启动时报告）
+        return cand          # 显式指定优先（是否存在/可执行由调用方校验）
     for c in browser_candidates(platform):
-        if os.path.exists(c):
+        if os.path.isfile(c) and os.access(c, os.X_OK):
             return c
     for name in ('google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser',
                  'microsoft-edge', 'microsoft-edge-stable', 'msedge', 'brave-browser',
@@ -136,7 +142,9 @@ def profile_base(platform=None):
         return os.path.join(base, 'tt-cdp')
     if p == 'darwin':
         return os.path.join(os.path.expanduser('~/Library/Caches'), 'tt-cdp')
-    base = os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache')
+    base = os.environ.get('XDG_CACHE_HOME') or ''
+    if not os.path.isabs(base):            # XDG 规范：相对路径应被忽略
+        base = os.path.expanduser('~/.cache')
     return os.path.join(base, 'tt-cdp')
 
 
@@ -151,46 +159,133 @@ def no_sandbox_flags(platform=None):
 
 
 # ────────────────────────────── 进程 ──────────────────────────────
-def list_python_processes():
-    """返回 ``[(pid:int, cmdline:str), ...]``（当前用户可见的 python 进程）。"""
+def _is_python_binary(path_or_name):
+    """按可执行文件/argv[0] 的 basename 判断是否是 Python 解释器。"""
+    base = os.path.basename(path_or_name or '').lower()
+    return bool(base) and (base.startswith('python') or base.startswith('pypy'))
+
+
+def _proc_argv(pid):
+    try:
+        with open('/proc/%d/cmdline' % pid, 'rb') as f:
+            raw = f.read()
+        parts = [p for p in raw.split(b'\0') if p]
+        return [p.decode('utf-8', 'replace') for p in parts] or None
+    except Exception:
+        return None
+
+
+def _proc_exe(pid):
+    try:
+        return os.readlink('/proc/%d/exe' % pid)
+    except Exception:
+        return None
+
+
+def _split_win_cmdline(cmd):
+    """Windows 命令行分词；并去掉 token 两侧的引号（路径含空格时 cmdline 会加引号）。"""
+    import shlex
+    try:
+        raw = shlex.split(cmd, posix=False)
+    except Exception:
+        raw = cmd.split()
     out = []
+    for tok in raw:
+        if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ('"', "'"):
+            tok = tok[1:-1]
+        out.append(tok)
+    return out
+
+
+def list_processes():
+    """返回 ``[(pid, argv:list[str]), ...]``；枚举失败返回 ``None``（区别于空列表）。"""
     if WIN:
-        ps = ("Get-CimInstance Win32_Process -Filter \"name='python.exe'\" | "
+        ps = ("Get-CimInstance Win32_Process | Where-Object { $_.Name -in "
+              "@('python.exe','pythonw.exe','python3.exe') } | "
               "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress")
         try:
             r = subprocess.run(['powershell', '-NoProfile', '-Command', ps],
                                capture_output=True, text=True, timeout=25)
-            txt = (r.stdout or '').strip()
-            if txt:
-                data = json.loads(txt)
-                if isinstance(data, dict):
-                    data = [data]
-                for d in data:
-                    pid = d.get('ProcessId')
-                    cmd = (d.get('CommandLine') or '').strip()
-                    if pid:
-                        out.append((int(pid), cmd))
+            data = json.loads((r.stdout or '').strip() or '[]')
+            if isinstance(data, dict):
+                data = [data]
+            out = []
+            for d in data:
+                pid = d.get('ProcessId')
+                cmd = (d.get('CommandLine') or '').strip()
+                if pid:
+                    out.append((int(pid), _split_win_cmdline(cmd)))
+            return out
         except Exception:
-            pass
+            return None
+    # Linux：直接读 /proc，精度最高
+    if os.path.isdir('/proc'):
+        out = []
+        try:
+            names = os.listdir('/proc')
+        except Exception:
+            return None
+        for name in names:
+            if not name.isdigit():
+                continue
+            pid = int(name)
+            argv = _proc_argv(pid)
+            if not argv:
+                continue
+            exe = _proc_exe(pid) or argv[0]
+            if _is_python_binary(argv[0]) or _is_python_binary(exe):
+                out.append((pid, argv))
         return out
-    # POSIX
+    # macOS / 无 /proc：ps 兜底
     try:
-        r = subprocess.run(['ps', '-eo', 'pid=,args='], capture_output=True, text=True,
-                           timeout=15)
-        for line in (r.stdout or '').splitlines():
-            parts = line.strip().split(None, 1)
-            if len(parts) != 2:
-                continue
-            try:
-                pid = int(parts[0])
-            except ValueError:
-                continue
-            cmd = parts[1]
-            if 'python' in cmd:
-                out.append((pid, cmd))
+        r = subprocess.run(['ps', '-eo', 'pid=,args='], capture_output=True,
+                           text=True, timeout=15)
     except Exception:
-        pass
+        return None
+    out = []
+    for line in (r.stdout or '').splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        import shlex
+        argv = shlex.split(parts[1])
+        if argv and _is_python_binary(argv[0]):
+            out.append((pid, argv))
     return out
+
+
+def list_python_processes():
+    """兼容旧接口：返回 ``[(pid, cmdline_str)]``；枚举失败返回 ``None``。"""
+    procs = list_processes()
+    if procs is None:
+        return None
+    return [(pid, ' '.join(argv)) for pid, argv in procs]
+
+
+def script_token_match(argv, names):
+    """判断进程是否**在脚本位置**运行了 names 中的某个脚本（避免子串/参数误杀）。
+
+    只检查：
+      * argv[0] 的 basename（直接执行脚本，如 `./monitor_server.py`）；
+      * 解释器之后**第一个非选项 token**（即 `python <script> ...` 的 <script>）；
+        `-c` / `-m` 视为"无脚本文件位置"，不再往后匹配参数。
+    """
+    if not argv:
+        return False
+    names = set(names)
+    if os.path.basename(argv[0]) in names:
+        return True
+    for tok in argv[1:]:
+        if tok in ('-c', '-m'):
+            return False
+        if tok.startswith('-'):
+            continue
+        return os.path.basename(tok) in names
+    return False
 
 
 def terminate(pid, grace=3.0):

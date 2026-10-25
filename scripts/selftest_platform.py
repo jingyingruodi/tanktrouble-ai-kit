@@ -10,13 +10,16 @@
 # =============================================================================
 """跨平台适配自检（Linux / macOS / Windows）。
 
-检查 `cdp_tools/platform_utils.py` 的各分支与端口环境变量：
-  1. 三个平台的浏览器候选列表是否非空；
-  2. 当前平台能否找到浏览器（找不到不算失败，但会提示 TT_BROWSER）；
-  3. profile 目录在三个平台下取值是否合理（Linux=XDG cache、macOS=~/Library/Caches）；
-  4. `TT_BROWSER` / `TT_CDP_PROFILE_BASE` / `TT_CHROME_NO_SANDBOX` 环境变量覆盖；
-  5. `list_python_processes()` 能否看到当前进程；
-  6. `TT_CDP_PORT` 是否能被 `ego_browser.discover()` 采用（有 CDP 在跑时）。
+检查 `cdp_tools/platform_utils.py` 与 `cdp_tools/ego_browser.py` 的关键分支：
+  1. 平台识别；
+  2. 三个平台的浏览器候选列表非空；
+  3. 当前平台能否找到浏览器（找不到不算失败，提示 TT_BROWSER）；
+  4. profile 目录（三平台）+ `TT_CDP_PROFILE_BASE` 覆盖 + XDG 相对路径被忽略；
+  5. `TT_BROWSER` 覆盖 + `launch_cdp._check_browser()` 对不存在路径报错；
+  6. `TT_CHROME_NO_SANDBOX=1` → `--no-sandbox`；
+  7. 进程枚举能看到自己 + kill 精确匹配（不误杀含关键词的非目标进程）；
+  8. ego state 目录优先 XDG_STATE_HOME（Linux）；
+  9. `TT_CDP_PORT` 生效（`resolve_port('auto')` 采用它；需有 CDP 在跑，否则跳过）。
 
 用法：python scripts/selftest_platform.py
 """
@@ -26,84 +29,139 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, 'cdp_tools'))
+sys.path.insert(0, ROOT)
 
 import platform_utils as pu  # noqa: E402
+import ego_browser as eb  # noqa: E402
 
 results = []
+skipped = []
 
 
 def check(name, cond, detail=''):
     results.append((name, bool(cond), detail))
-    print('  %s %-46s %s' % ('✅' if cond else '❌', name, detail), flush=True)
+    print('  %s %-52s %s' % ('✅' if cond else '❌', name, detail), flush=True)
+
+
+def skip(name, why):
+    skipped.append(name)
+    print('  ⏭️  %-52s %s' % (name, why), flush=True)
 
 
 def main():
     print('[1] 平台识别')
-    check('sys.platform', True, sys.platform)
     check('is_windows/is_macos/is_linux 至少一个为真',
-          pu.is_windows() or pu.is_macos() or pu.is_linux(),
-          'win=%s mac=%s linux=%s' % (pu.is_windows(), pu.is_macos(), pu.is_linux()))
+          pu.is_windows() or pu.is_macos() or pu.is_linux(), sys.platform)
 
     print('[2] 三平台浏览器候选')
     for plat in ('win32', 'darwin', 'linux'):
         cands = pu.browser_candidates(plat)
-        check('browser_candidates(%s)' % plat, len(cands) > 0, 'n=%d' % len(cands))
+        check('browser_candidates(%s) 非空' % plat, len(cands) > 0, 'n=%d' % len(cands))
 
     print('[3] 当前平台浏览器')
     b = pu.find_browser()
     if b:
-        check('find_browser()', True, b)
+        check('find_browser()', os.path.exists(b) or bool(os.environ.get('TT_BROWSER')), b)
     else:
-        print('  ⚠️  find_browser() 未找到浏览器（Linux 可设 TT_BROWSER=/usr/bin/chromium）',
-              flush=True)
+        skip('find_browser()', '未找到（Linux 可设 TT_BROWSER=/usr/bin/chromium）')
 
     print('[4] profile 目录')
-    for plat, marker in (('win32', 'tt-cdp'), ('darwin', 'Library/Caches'),
-                         ('linux', '.cache')):
-        old = os.environ.pop('TT_CDP_PROFILE_BASE', None)
-        try:
-            p = pu.profile_base(plat)
-        finally:
-            if old is not None:
-                os.environ['TT_CDP_PROFILE_BASE'] = old
-        check('profile_base(%s)' % plat, p.endswith('tt-cdp'), p)
-
-    print('[5] 环境变量覆盖')
-    os.environ['TT_BROWSER'] = '/tmp/fake-browser'
-    check('TT_BROWSER', pu.find_browser() == '/tmp/fake-browser', pu.find_browser())
-    del os.environ['TT_BROWSER']
+    os.environ.pop('TT_CDP_PROFILE_BASE', None)
+    p_win = pu.profile_base('win32')
+    p_mac = pu.profile_base('darwin')
+    p_lin = pu.profile_base('linux')
+    check('profile_base(win32)', p_win.endswith('tt-cdp') and os.path.isabs(p_win), p_win)
+    check('profile_base(darwin)', 'Library' in p_mac and os.path.isabs(p_mac), p_mac)
+    check('profile_base(linux)', os.path.isabs(p_lin) and p_lin.endswith('tt-cdp'), p_lin)
     os.environ['TT_CDP_PROFILE_BASE'] = '/tmp/tt-profile'
-    check('TT_CDP_PROFILE_BASE', pu.profile_base() == '/tmp/tt-profile', pu.profile_base())
+    check('TT_CDP_PROFILE_BASE 覆盖', pu.profile_base() == '/tmp/tt-profile',
+          pu.profile_base())
     del os.environ['TT_CDP_PROFILE_BASE']
+    old_xdg = os.environ.get('XDG_CACHE_HOME')
+    os.environ['XDG_CACHE_HOME'] = 'relative/cache'
+    try:
+        check('XDG_CACHE_HOME 相对路径被忽略',
+              not pu.profile_base('linux').startswith('relative'), pu.profile_base('linux'))
+    finally:
+        if old_xdg is None:
+            os.environ.pop('XDG_CACHE_HOME', None)
+        else:
+            os.environ['XDG_CACHE_HOME'] = old_xdg
+
+    print('[5] 浏览器覆盖与可执行性校验')
+    os.environ['TT_BROWSER'] = '/tmp/fake-browser'
+    check('TT_BROWSER 覆盖', pu.find_browser() == '/tmp/fake-browser', pu.find_browser())
+    try:
+        import launch_cdp
+        err = launch_cdp._check_browser('/tmp/fake-browser')
+        check('launch_cdp._check_browser(不存在路径) 报错', err is not None, str(err)[:60])
+    except Exception as e:
+        print('  ⚠️  导入 launch_cdp 失败: %s: %s' % (type(e).__name__, e), flush=True)
+    del os.environ['TT_BROWSER']
+
+    print('[6] Linux root no-sandbox')
     os.environ['TT_CHROME_NO_SANDBOX'] = '1'
-    check('TT_CHROME_NO_SANDBOX', '--no-sandbox' in pu.no_sandbox_flags(),
+    check('TT_CHROME_NO_SANDBOX=1', '--no-sandbox' in pu.no_sandbox_flags(),
           str(pu.no_sandbox_flags()))
     del os.environ['TT_CHROME_NO_SANDBOX']
 
-    print('[6] 进程列表')
-    procs = pu.list_python_processes()
-    mine = [p for p in procs if p[0] == os.getpid()]
-    check('list_python_processes() 能看到自己', bool(mine),
-          'total=%d' % len(procs))
+    print('[7] 进程枚举与 kill 精确匹配')
+    procs = pu.list_processes()
+    if procs is None:
+        check('list_processes() 枚举成功', False, '枚举返回 None（ps/PowerShell 不可用）')
+    else:
+        mine = [p for p in procs if p[0] == os.getpid()]
+        check('list_processes() 能看到自己', bool(mine), 'total=%d' % len(procs))
+    names = ('monitor_server.py', 'playback_server.py')
+    check('精确匹配: python x/monitor_server.py',
+          pu.script_token_match(['python', '/repo/scripts/monitor_server.py'], names))
+    check('不误杀: vim python_monitor_server_notes.txt',
+          not pu.script_token_match(['vim', 'python_monitor_server_notes.txt'], names))
+    check('不误杀: tail -f python/monitor_server.log',
+          not pu.script_token_match(['tail', '-f', 'python/monitor_server.log'], names))
 
-    print('[7] TT_CDP_PORT（有 CDP 时验证）')
-    try:
-        from ego_browser import discover
-        os.environ['TT_CDP_PORT'] = '62202'
-        d = discover(preferred=None)
-        found = d.get('port')
-        if found:
-            check('discover() 采用 TT_CDP_PORT', found == 62202, str(d.get('port')))
-        else:
-            print('  ⚠️  当前没有 CDP 在 62202 上（跳过此项；设 TT_CDP_PORT=<端口> 即可）',
-                  flush=True)
-        del os.environ['TT_CDP_PORT']
-    except Exception as e:
-        print('  ⚠️  discover 测试失败: %s: %s' % (type(e).__name__, e), flush=True)
+    print('[8] ego state 目录（Linux 优先 XDG_STATE_HOME）')
+    env = {'LOCALAPPDATA': '/win/local', 'XDG_STATE_HOME': '/xdg/state',
+           'XDG_DATA_HOME': '/xdg/data', 'HOME': '/home/u'}
+    lin_dirs = eb.state_dirs(platform='linux', env=env)
+    check('state_dirs(linux) 含 XDG_STATE_HOME',
+          any(d.startswith('/xdg/state') for d in lin_dirs), str(lin_dirs[:2]))
+    check('state_dirs(linux) 含 XDG_DATA_HOME fallback',
+          any(d.startswith('/xdg/data') for d in lin_dirs), str(lin_dirs[3:5]))
+    check('state_dirs(win32) 用 LOCALAPPDATA',
+          any(d.startswith('/win/local') for d in eb.state_dirs(platform='win32', env=env)),
+          str(eb.state_dirs(platform='win32', env=env)[:1]))
+
+    print('[9] TT_CDP_PORT 生效（auto 模式）')
+    live = None
+    cand = os.environ.get('TT_CDP_PORT')
+    if cand and cand.isdigit() and eb.probe(int(cand)):
+        live = int(cand)
+    if live is None:
+        for port in (62202, ):
+            if eb.probe(port):
+                live = port
+                break
+    if live is None:
+        for port in range(9222, 9232):
+            if eb.probe(port):
+                live = port
+                break
+    if live is None:
+        skip('resolve_port(auto) 采用 TT_CDP_PORT', '当前没有 CDP 在跑')
+    else:
+        os.environ['TT_CDP_PORT'] = str(live)
+        try:
+            got = eb.resolve_port('auto')
+            check('resolve_port(auto) 采用 TT_CDP_PORT', got == live,
+                  '%s -> %s' % (live, got))
+        finally:
+            del os.environ['TT_CDP_PORT']
 
     bad = [r for r in results if not r[1]]
-    print('\n结论: %s（%d 项检查，失败 %d）'
-          % ('✅ PASS' if not bad else '❌ FAIL', len(results), len(bad)), flush=True)
+    print('\n结论: %s（%d 项检查，失败 %d，跳过 %d）'
+          % ('✅ PASS' if not bad else '❌ FAIL', len(results), len(bad), len(skipped)),
+          flush=True)
     return 0 if not bad else 1
 
 

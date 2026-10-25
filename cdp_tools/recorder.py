@@ -35,6 +35,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'cdp_tools'))
 class Recorder:
     def __init__(self, outfile='tanktrouble_recording.jsonl', append=False):
         self.outfile = outfile
+        # 自动创建父目录（干净 clone 里 data/、scripts/scratch/ 不存在）
+        parent = os.path.dirname(os.path.abspath(outfile))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         # 默认覆盖（'w'），避免重录时混入旧帧。
         # 只有明确要延续上一次录制时才用 append=True。
         self.fh = open(outfile, 'a' if append else 'w', encoding='utf-8')

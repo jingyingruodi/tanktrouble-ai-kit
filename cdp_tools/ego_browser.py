@@ -17,7 +17,7 @@ dsh-ego-browser（DSH 的浏览器插件）用 Edge 启动一个**常驻单例�
     state 目录的 `browser.json` 里：
         {"port":51109,"wsUrl":"ws://127.0.0.1:51109/devtools/browser/...",
          "pid":25780,"binary":"...msedge.exe","headless":false,
-         "profileDir":"...\\ego-lite-linux\\profile"}
+         "profileDir":"<state_dir>/profile"}
 
 因此本模块把"端口"变成一个可自动解析的值，项目里所有脚本都可以传 `auto`：
 
@@ -32,7 +32,9 @@ dsh-ego-browser（DSH 的浏览器插件）用 Edge 启动一个**常驻单例�
     python cdp_tools/ego_browser.py
 """
 import json
+import ntpath
 import os
+import posixpath
 import sys
 import urllib.request
 
@@ -43,20 +45,49 @@ DEFAULT_SCAN_END = 9231          # 含 9231
 GAME_URL_SUBSTR = 'tanktrouble.com'
 
 
-def state_dirs():
-    """返回 ego 浏览器 state 目录候选列表（带环境变量覆盖）。"""
-    dirs = []
-    env = os.environ.get('EGO_BROWSER_STATE_DIR')
-    if env:
-        dirs.append(env)
-    if sys.platform.startswith('win'):
-        base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~\\AppData\\Local')
-    elif sys.platform == 'darwin':
-        base = os.path.expanduser('~/Library/Application Support')
+def _join_for(platform, *parts):
+    """按目标平台拼接路径（Windows 用 ntpath，其余用 posixpath）。"""
+    return ntpath.join(*parts) if platform.startswith('win') else posixpath.join(*parts)
+
+
+def _home_for(platform, env):
+    return env.get('HOME') or os.path.expanduser('~')
+
+
+def _dirs_for(platform, env):
+    """按平台返回 ego state 根目录候选（Linux 先 XDG state，再 XDG data）。"""
+    bases = []
+    if platform.startswith('win'):
+        bases.append(env.get('LOCALAPPDATA')
+                     or _join_for(platform, _home_for(platform, env), 'AppData', 'Local'))
+    elif platform == 'darwin':
+        bases.append(_join_for(platform, _home_for(platform, env),
+                               'Library', 'Application Support'))
     else:
-        base = os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share')
-    for name in STATE_DIR_NAMES:
-        dirs.append(os.path.join(base, name))
+        # DSH ego runtime（paths.mjs）：browser.json 在 XDG *state* 目录，profile 在 data。
+        for key, default in (('XDG_STATE_HOME', ('.local', 'state')),
+                             ('XDG_DATA_HOME', ('.local', 'share'))):
+            v = env.get(key) or ''
+            if not posixpath.isabs(v):        # XDG 规范：相对路径应被忽略
+                v = _join_for(platform, _home_for(platform, env), *default)
+            if v not in bases:
+                bases.append(v)
+    return bases
+
+
+def state_dirs(platform=None, env=None):
+    """返回 ego 浏览器 state 目录候选列表（带环境变量覆盖）。"""
+    env = os.environ if env is None else env
+    platform = platform or sys.platform
+    dirs = []
+    override = env.get('EGO_BROWSER_STATE_DIR')
+    if override:
+        dirs.append(override)
+    for base in _dirs_for(platform, env):
+        for name in STATE_DIR_NAMES:
+            d = _join_for(platform, base, name)
+            if d not in dirs:
+                dirs.append(d)
     return dirs
 
 
@@ -75,13 +106,19 @@ def read_browser_json():
     return None
 
 
+CDP_HOSTS = ('127.0.0.1', '[::1]', 'localhost')
+
+
 def http_json(port, path='/json/version', timeout=1.0):
-    """GET 一个 CDP HTTP 端点，返回解析后的 JSON；失败返回 None。"""
-    try:
-        with urllib.request.urlopen(f'http://127.0.0.1:{port}{path}', timeout=timeout) as r:
-            return json.loads(r.read().decode())
-    except Exception:
-        return None
+    """GET 一个 CDP HTTP 端点（IPv4→IPv6→localhost），返回 JSON；失败返回 None。"""
+    for host in CDP_HOSTS:
+        try:
+            with urllib.request.urlopen(f'http://{host}:{port}{path}',
+                                        timeout=timeout) as r:
+                return json.loads(r.read().decode())
+        except Exception:
+            continue
+    return None
 
 
 def probe(port, timeout=1.0):
@@ -117,7 +154,7 @@ def discover(preferred=None, scan_start=DEFAULT_SCAN_START, scan_end=DEFAULT_SCA
     返回 dict：{port, source, browser, info|None, pages|[], game_page|None, error|None}
     找不到时 port=None。
     """
-    if preferred is None:
+    if preferred in (None, '', 'auto'):
         preferred = os.environ.get('TT_CDP_PORT') or None
     result = {'port': None, 'source': None, 'browser': None, 'info': None,
               'pages': [], 'game_page': None, 'error': None}
@@ -175,6 +212,17 @@ def resolve_port(value=None, **kw):
     if info['port']:
         return info['port']
     raise RuntimeError(info['error'])
+
+
+def resolve_port_cli(value='auto'):
+    """命令行用：解析失败时打印可读错误并以 SystemExit(2) 退出（而非裸 traceback）。"""
+    try:
+        return resolve_port(value)
+    except Exception as e:
+        print(f'[cdp] ❌ 无法解析 CDP 端口 (value={value!r}): {e}', flush=True)
+        print('       提示：设置 TT_CDP_PORT=<端口>，或先启动浏览器：'
+              'python launch_cdp.py 9222', flush=True)
+        raise SystemExit(2)
 
 
 def describe(info):

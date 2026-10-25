@@ -9,14 +9,26 @@
 #   零容忍，可永久封号且无警告）。
 # For education & academic research only. No online public matches. No affiliation.
 # =============================================================================
-# 清理 monitor_server / playback_server 残留进程（跨平台，内部走 platform_utils）
+# 清理 monitor_server / playback_server 残留进程（跨平台，内部走 platform_utils；
+# 按 argv 脚本文件名精确匹配，不会误杀只是命令行里含关键词的其它进程）
 #   ./kill-monitor.sh          # 只杀监控相关
 #   ./kill-monitor.sh --all    # 额外杀 selftest_monitor / mover_harness
 set -euo pipefail
-cd "$(dirname "$0")"
-# 若存在 .venv 则自动激活（setup-linux.sh 会创建）
-if [ -f "$(dirname "$0")/.venv/bin/activate" ]; then
+
+resolve_self() {
+  if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
+    readlink -f "$0"
+  else
+    python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0"
+  fi
+}
+SELF="$(resolve_self)"
+DIR="$(cd "$(dirname "$SELF")" && pwd)"
+cd "$DIR"
+
+if [ -f "$DIR/.venv/bin/activate" ]; then
   # shellcheck disable=SC1091
-  . "$(dirname "$0")/.venv/bin/activate"
+  . "$DIR/.venv/bin/activate"
 fi
+
 python3 scripts/kill_monitor.py "$@"
