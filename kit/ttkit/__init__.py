@@ -160,8 +160,20 @@ class Kit:
             self._roles_ts = now
         return dict(self._roles_cache)
 
-    async def my_pid(self, role='arrows'):
-        """选出"自己的角色"（默认 arrows）。找不到该角色时**抛 RuntimeError**。"""
+    async def my_pid(self, role='arrows', wait=False, timeout=10.0):
+        """选出"自己的角色"（默认 arrows）。
+
+        v14：``wait=True`` 时在回合间隙（roles() 为空/角色未出生）轮询等待，
+        最多 ``timeout`` 秒；仍找不到才抛 RuntimeError。
+        """
+        if wait:
+            t0 = time.time()
+            while time.time() - t0 < float(timeout):
+                try:
+                    return await self.my_pid(role, wait=False)
+                except RuntimeError:
+                    await asyncio.sleep(0.3)
+            raise RuntimeError('等待 %.1fs 仍没有 role=%r 的可控角色' % (float(timeout), role))
         rs = await self.roles(refresh=True)
         for pid, r in rs.items():
             if r == role:
@@ -961,14 +973,31 @@ class Kit:
             max_traveled=float(max_traveled), max_bounces=cap, muzzle_offset=off)
 
     async def target_velocity(self, target_id):
-        """目标坦克的线速度 (vx, vy)（米/秒）；读不到返回 None。"""
+        """目标坦克的线速度 (vx, vy)（米/秒）；读不到返回 None。
+
+        v14：B2D 速度偶发读到 (0,0)（抽样瞬间），此时用两点位移兜底。
+        """
+        v = None
         try:
-            return await self.bhv.get_tank_velocity(target_id)
+            v = await self.bhv.get_tank_velocity(target_id)
         except Exception:
-            return None
+            v = None
+        try:
+            zero = (not v) or (abs(float(v[0])) < 1e-6 and abs(float(v[1])) < 1e-6)
+        except Exception:
+            zero = True
+        if not zero:
+            return (float(v[0]), float(v[1]))
+        p1 = await self.position(target_id)
+        await asyncio.sleep(0.2)
+        p2 = await self.position(target_id)
+        if p1 is None or p2 is None:
+            return v
+        dt = 0.2
+        return ((p2[0] - p1[0]) / dt, (p2[1] - p1[1]) / dt)
 
     async def lead_target(self, pid, target_id, bullet_speed=None, max_iter=3,
-                          max_shift_m=60.0):
+                          max_shift_m=90.0, use_path=True, tol_m=1.7):
         """移动目标提前量（含收敛/可拦截判定）。
 
         返回 ``{'pos','velocity','shift','interceptable','converged','reason'}``：
@@ -1006,6 +1035,28 @@ class Kit:
             return {'pos': (float(tpos[0]), float(tpos[1])), 'velocity': vel,
                     'shift': 0.0, 'interceptable': speed <= bs * 0.5,
                     'converged': False, 'reason': 'no_velocity'}
+        # v14：用**弹道路径长度**（而不是直线距离）迭代修正飞行时间
+        # （反弹路径 40m 时飞行时间可能比直线估算长 1~4s；忽略会把提前量打少）
+        if use_path and speed > 0.5:
+            try:
+                for _ in range(int(max_iter)):
+                    cands = await self.find_aim_at_point(
+                        pid, tuple(pred), tol_m=float(tol_m) * 1.5,
+                        steps=(5,), profile='relaxed', require_hit_tank=False)
+                    if not cands:
+                        break
+                    trav = float(cands[0].get('traveled') or 0.0)
+                    if trav <= 0:
+                        break
+                    t_flight = trav / bs
+                    new_pred = (tpos[0] + float(vel[0]) * t_flight,
+                                tpos[1] + float(vel[1]) * t_flight)
+                    if math.hypot(new_pred[0] - pred[0], new_pred[1] - pred[1]) < 0.4:
+                        pred = new_pred
+                        break
+                    pred = new_pred
+            except Exception:
+                pass
         shift = math.hypot(float(pred[0]) - tpos[0], float(pred[1]) - tpos[1])
         # 发散保护：提前量不应超过"目标沿速度跑 3 倍飞行时间"的常识上界
         if shift > float(max_shift_m) or (speed > 0 and shift > 3.0 * speed):
@@ -1132,6 +1183,13 @@ class Kit:
                 if it.get('self_hit'):
                     continue
                 if not it.get('self_risk_ok', True):
+                    continue
+                # v14：预测点弹道没有 hit_pid，不能用 candidate_tier；
+                # 直接用几何放大阈值，避免 70m+ 多反弹迟到自伤。
+                _nb = int(it.get('bounces') or 0)
+                _tv = float(it.get('traveled') or 0)
+                _need = 4.0 + 0.6 * _nb + 0.03 * _tv
+                if float(it.get('self_risk') or 0.0) < _need:
                     continue
                 if require_hit_tank and not it.get('hit'):
                     continue
