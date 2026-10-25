@@ -104,6 +104,18 @@ STATE_JS = r"""
   const gc = gmObj ? (gmObj.getGameController ? gmObj.getGameController() : (gmObj.gameController || null)) : null;
   if (!gc) return {err: (gmObj ? 'no gc' : 'no GameManager')};
   out.t_ms = Date.now();
+  // v6.4：渲染帧计数/时间戳（动态测试对齐用；只增加一个轻量 rAF 计数循环，不改游戏逻辑）
+  // • raf_frame 每渲染帧 +1；raf_ts 是该帧的 Date.now()（后台标签页/暂停时 rAF 不前进）
+  // • 截图内容 ≈ 最近一次已绘制帧，可用 raf_ts 把 state 与截图对齐到帧级（仍非逐对象时间戳）
+  try {
+    if (!window.__ttFrame) {
+      window.__ttFrame = 0; window.__ttFrameTs = Date.now();
+      const __ttTick = () => { window.__ttFrame++; window.__ttFrameTs = Date.now(); requestAnimationFrame(__ttTick); };
+      requestAnimationFrame(__ttTick);
+    }
+    out.raf_frame = window.__ttFrame;
+    out.raf_ts = window.__ttFrameTs;
+  } catch(e) {}
   try { if (gc.getState) out.phase = gc.getState(); } catch(e){}
   try { if (gc.getRoundId) out.roundId = gc.getRoundId(); } catch(e){}
   try { if (gc.countDownValue !== undefined) { out.countdown_raw = gc.countDownValue;
