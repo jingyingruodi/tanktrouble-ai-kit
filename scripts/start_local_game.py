@@ -133,6 +133,29 @@ BIND_JS = r"""
 """
 
 
+HIDE_OVERLAY_JS = r"""
+(() => {
+  // 本地局的 "Select your controls" 是网站 DOM 遮罩（#overlay，背景 rgba(0,0,0,0.8)）。
+  // 自动开局走 API 绑定 input set，绕过了网站 UI 流程，遮罩不会被自动收起，会盖住游戏画面。
+  // 这里去掉遮罩的灰暗背景并隐藏按键设置表单；不影响 canvas 内的真实游戏渲染。
+  const out = {overlay: false, controls: 0, dimBefore: null, dimAfter: null};
+  const o = document.getElementById('overlay');
+  if (!o) return out;
+  out.overlay = true;
+  try { out.dimBefore = getComputedStyle(o).backgroundColor; } catch (e) {}
+  o.style.background = 'transparent';
+  const cs = [...o.querySelectorAll('.controls')];
+  cs.forEach(e => { e.style.display = 'none'; });
+  out.controls = cs.length;
+  try { out.dimAfter = getComputedStyle(o).backgroundColor; } catch (e) {}
+  // 若 overlay 仍有可见子节点，说明还有其他菜单层，交给调用方决定
+  out.visibleKids = [...o.children].filter(c =>
+      (c.offsetWidth || c.offsetHeight) && getComputedStyle(c).display !== 'none').length;
+  return out;
+})()
+"""
+
+
 async def _probe(cdp):
     return await cdp.eval(PROBE_JS)
 
@@ -214,6 +237,13 @@ async def ensure_local_game(port='auto', players=2, bind=None, restart=False,
     plan = [[pid, bind[i % len(bind)]] for i, pid in enumerate(pids)]
     res = await cdp.eval(BIND_JS % json.dumps(plan))
     log('[local] 绑定结果: %s' % json.dumps(res, ensure_ascii=False))
+
+    # 3) 隐藏"按键设置"DOM 遮罩（否则截图/监视画面会被灰暗层盖住）
+    try:
+        hid = await cdp.eval(HIDE_OVERLAY_JS)
+        log('[local] 隐藏按键设置遮罩: %s' % json.dumps(hid, ensure_ascii=False))
+    except Exception as e:
+        log('[local] 隐藏遮罩失败（不影响对局状态）: %s' % e)
 
     st2 = await _probe(cdp)
     roles = st2.get('roles') or {}

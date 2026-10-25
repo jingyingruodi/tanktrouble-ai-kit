@@ -32,7 +32,7 @@ import os
 import sys
 import time
 
-BB = os.environ.get('TT_BB_DIR') or r'D:\AI Agent\tt_bb_lowlevel5'
+BB = os.environ.get('TT_BB_DIR') or r'D:\AI Agent\tt_bb_lowlevel6'
 if BB not in sys.path:
     sys.path.insert(0, BB)
 
@@ -198,6 +198,56 @@ async def main():
                                 from_rots=[0.0, _m.radians(90)], ignore_self=True)
         print('  simulate_shots from_rots: n=%d' % len(bsim))
         ok &= len(bsim) == 2
+
+        print('== 13) v6 原语（第五轮报告修复）==')
+        # from_pose：假设位姿时自车 OBB 跟随（用合成状态单测，稳定可复现）
+        st_syn = {'tanks': {'me': {'x': 5, 'y': 5, 'rot': 0.0},
+                            'opp': {'x': 45, 'y': 45, 'rot': 0.0}},
+                  'walls': [{'x1': 0, 'y1': 0, 'x2': 0, 'y2': 50},
+                            {'x1': 0, 'y1': 0, 'x2': 50, 'y2': 0},
+                            {'x1': 0, 'y1': 50, 'x2': 50, 'y2': 50},
+                            {'x1': 50, 'y1': 0, 'x2': 50, 'y2': 50}]}
+        syn_pid = 'me'   # st_syn 用固定 pid 名
+        r_p = p.simulate_shot(syn_pid, 90.0, st_syn, from_pose=(15.0, 15.0, 0.0),
+                              max_bounces=16, ignore_tanks=['opp'])
+        print('  from_pose=(15,15): hitTank=%r traveled=%.1f（应命中自己）'
+              % (r_p.get('hitTank'), r_p.get('traveled') or 0))
+        ok &= r_p.get('hitTank') == syn_pid
+        # 官方弹道派生字段
+        ann = p._annotate_official_path({'hit': False, 'bounces': 8,
+                                         'traveled': 180.0}, 180, 8)
+        print('  official annotate: reason=%r max_len=%r'
+              % (ann.get('truncation_reason'), ann.get('max_length_applied')))
+        ok &= ann.get('truncation_reason') == 'bounces'
+        # 暂停/时钟字段（真实 state）
+        for k in ('paused', 'game_time_ms', 'frames', 'hidden'):
+            print('  state[%s] = %r' % (k, st.get(k)))
+        ok &= 'paused' in st and 'game_time_ms' in st
+        # round_seen_age 仍在
+        ok &= isinstance(st.get('round_seen_age_ms'), (int, float))
+
+        print('== 14) v6.1（监控/get 测试修复）==')
+        print('  active=%r phase=%r countdown=%r theme=%r' % (
+            st.get('active'), st.get('phase'), st.get('countdown'), st.get('theme')))
+        ok &= st.get('active') == (st.get('phase') == 'in round')
+        if st.get('phase') == 'in round':
+            ok &= st.get('countdown') is None
+        ok &= isinstance(st.get('theme'), (int, float))
+        print('  round_seen_age_ms=%r round_age_ms=%r' % (
+            st.get('round_seen_age_ms'), st.get('round_age_ms')))
+        ok &= isinstance(st.get('round_seen_age_ms'), (int, float))
+        # vx_fd：前进 0.35s 后两次采样应为正速度
+        me2 = me
+        await p.set_input(me2, fwd=True)
+        await asyncio.sleep(0.35)
+        s_a = await p.state()
+        await asyncio.sleep(0.08)
+        s_b = await p.state()
+        await p.release(me2)
+        tb = (s_b.get('tanks') or {}).get(str(me2)) or {}
+        sp = tb.get('speed_fd')
+        print('  vx_fd/vy_fd/speed_fd = %r/%r/%r' % (tb.get('vx_fd'), tb.get('vy_fd'), sp))
+        ok &= isinstance(sp, (int, float)) and sp > 3.0
 
         print('\n结论:', '✅ PASS' if ok else '❌ FAIL')
         return 0 if ok else 1

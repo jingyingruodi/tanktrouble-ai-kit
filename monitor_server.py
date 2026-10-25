@@ -106,8 +106,22 @@ STATE_JS = r"""
   out.t_ms = Date.now();
   try { if (gc.getState) out.phase = gc.getState(); } catch(e){}
   try { if (gc.getRoundId) out.roundId = gc.getRoundId(); } catch(e){}
-  try { if (gc.countDownValue !== undefined) out.countdown = gc.countDownValue; } catch(e){}
-  try { if (gc.isRoundActive) out.active = gc.isRoundActive(); } catch(e){}
+  try { if (gc.countDownValue !== undefined) { out.countdown_raw = gc.countDownValue;
+    out.countdown = (gc.getState && gc.getState() === 'counting down') ? gc.countDownValue : null; } } catch(e){}
+  try { if (gc.getTheme) out.theme = gc.getTheme(); } catch(e){}
+  // 游戏暂停/时钟（v6）：窗口失焦/后台时 Phaser 会暂停，此时 set_input 会被静默忽略，
+  // 但 phase/accepts_input 仍可能是 in round —— 必须能检测到。
+  try {
+    const g = gmObj && gmObj.phaserInstance;
+    if (g) {
+      out.paused = !!g.paused;
+      if (g.time) out.game_time_ms = g.time.now;   // 帧计数/fps 未开 advancedTiming，恒 0，不暴露
+    }
+    out.hidden = !!document.hidden;
+  } catch(e){}
+  try { if (gc.isRoundActive) out.roundActive = !!gc.isRoundActive(); } catch(e){}
+  // active 语义修复：gc.isRoundActive() 实测恒 false，用 phase 推导
+  out.active = (out.phase === 'in round');
   // allPlayerIds: use getActivePlayerIds() directly.
   // - Includes players who died but are still in the room (their kills still score).
   // - getActivePlayerIds() excludes spectators who left (the old ghost bug was in
