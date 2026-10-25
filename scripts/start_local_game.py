@@ -24,12 +24,14 @@
       playerId 上。绑定后静态角色识别立即生效，setInputState 链路可用。
 
 流程：Menu →(菜单处理器) Lobby →(localGameButton 处理器) 对局 → 绑定 input set → 校验
+      → 关闭网站按键浮层（仅 CSS，避免破坏渲染顺序）→ 可选固定主题
 
 用法：
     python scripts/start_local_game.py                       # ego 浏览器 + 2 人局
     python scripts/start_local_game.py --players 3           # 3 人局（WASD/方向键/鼠标）
     python scripts/start_local_game.py --port 9222           # 指定端口
     python scripts/start_local_game.py --restart             # 先刷新页面再开局（干净复现）
+    python scripts/start_local_game.py --restart --theme 0   # 固定 STANDARD 主题（无装饰；截图/像素分析推荐）
     python scripts/start_local_game.py --json                # 只输出机器可读结果
 
 作为库使用：
@@ -135,22 +137,22 @@ BIND_JS = r"""
 
 HIDE_OVERLAY_JS = r"""
 (() => {
-  // 本地局的 "Select your controls" 是网站 DOM 遮罩（#overlay，背景 rgba(0,0,0,0.8)）。
-  // 自动开局走 API 绑定 input set，绕过了网站 UI 流程，遮罩不会被自动收起，会盖住游戏画面。
-  // 这里去掉遮罩的灰暗背景并隐藏按键设置表单；不影响 canvas 内的真实游戏渲染。
-  const out = {overlay: false, controls: 0, dimBefore: null, dimAfter: null};
+  // 只做 CSS 隐藏（不调用 ControlsOverlay.hide()/popOverlay，避免破坏 Game scene 渲染顺序）：
+  // 1) 隐藏网站"按键设置"浮层里的控件；
+  // 2) 去掉 #overlay 的 rgba(0,0,0,0.8) 灰暗背景。
+  const out = {overlay: false, controls: 0, dim: null};
   const o = document.getElementById('overlay');
-  if (!o) return out;
-  out.overlay = true;
-  try { out.dimBefore = getComputedStyle(o).backgroundColor; } catch (e) {}
-  o.style.background = 'transparent';
-  const cs = [...o.querySelectorAll('.controls')];
-  cs.forEach(e => { e.style.display = 'none'; });
-  out.controls = cs.length;
-  try { out.dimAfter = getComputedStyle(o).backgroundColor; } catch (e) {}
-  // 若 overlay 仍有可见子节点，说明还有其他菜单层，交给调用方决定
-  out.visibleKids = [...o.children].filter(c =>
-      (c.offsetWidth || c.offsetHeight) && getComputedStyle(c).display !== 'none').length;
+  if (o) {
+    out.overlay = true;
+    try { out.dim = getComputedStyle(o).backgroundColor; } catch (e) {}
+    o.style.background = 'transparent';
+    const cs = [...o.querySelectorAll('.controls')];
+    cs.forEach(e => { e.style.display = 'none'; });
+    out.controls = cs.length;
+  }
+  // 浮层可能稍后才被网站插入：再兜底隐藏所有 .controls
+  document.querySelectorAll('.controls').forEach(e => { e.style.display = 'none'; });
+  out.controls = Math.max(out.controls, document.querySelectorAll('.controls').length);
   return out;
 })()
 """
@@ -181,7 +183,7 @@ async def _wait(cdp, predicate, timeout, interval=0.5, log=None, label=''):
 
 
 async def ensure_local_game(port='auto', players=2, bind=None, restart=False,
-                            timeout=90.0, log=print):
+                            timeout=90.0, log=print, theme=None):
     """
     确保目标浏览器处于**本地对局中**且 input set 已绑定。
 
@@ -238,12 +240,23 @@ async def ensure_local_game(port='auto', players=2, bind=None, restart=False,
     res = await cdp.eval(BIND_JS % json.dumps(plan))
     log('[local] 绑定结果: %s' % json.dumps(res, ensure_ascii=False))
 
-    # 3) 隐藏"按键设置"DOM 遮罩（否则截图/监视画面会被灰暗层盖住）
+    # 3) 关闭"按键设置"浮层（否则会一直盖住真实游戏画面）
     try:
         hid = await cdp.eval(HIDE_OVERLAY_JS)
-        log('[local] 隐藏按键设置遮罩: %s' % json.dumps(hid, ensure_ascii=False))
+        log('[local] 关闭按键设置浮层: %s' % json.dumps(hid, ensure_ascii=False))
     except Exception as e:
-        log('[local] 隐藏遮罩失败（不影响对局状态）: %s' % e)
+        log('[local] 关闭浮层失败（不影响对局状态）: %s' % e)
+    # 3.1) 可选：固定地图主题（0=STANDARD 无装饰；1=HALLOWEEN；2=CHRISTMAS；4=RANDOM）
+    if theme is not None:
+        try:
+            th = await cdp.eval(
+                "(() => { const gc=GameManager.getGameController();"
+                " try { gc.setTheme(%d); return {theme: gc.getTheme(), name: null}; }"
+                " catch(e) { return {err:String(e)}; } })()" % int(theme))
+            log('[local] 固定主题: %s' % json.dumps(th, ensure_ascii=False))
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            log('[local] 固定主题失败: %s' % e)
 
     st2 = await _probe(cdp)
     roles = st2.get('roles') or {}
@@ -267,6 +280,8 @@ async def main():
     ap.add_argument('--bind', default=','.join(DEFAULT_BIND),
                     help='input set 绑定顺序，逗号分隔（默认 arrowKeys,WASDKeys,mouse）')
     ap.add_argument('--restart', action='store_true', help='先刷新页面再开局')
+    ap.add_argument('--theme', type=int, default=None,
+                    help='固定地图主题：0=STANDARD(无装饰) 1=HALLOWEEN 2=CHRISTMAS 4=RANDOM')
     ap.add_argument('--timeout', type=float, default=90.0, help='总超时秒数')
     ap.add_argument('--json', action='store_true', help='只输出 JSON 结果')
     args = ap.parse_args()
@@ -280,7 +295,8 @@ async def main():
         print(describe(discover()), flush=True)
     try:
         info = await ensure_local_game(args.port, players=args.players, bind=bind,
-                                       restart=args.restart, timeout=args.timeout, log=log)
+                                       restart=args.restart, timeout=args.timeout, log=log,
+                         theme=args.theme)
     except Exception as e:
         print(json.dumps({'ok': False, 'error': str(e)}, ensure_ascii=False))
         return 1

@@ -108,7 +108,15 @@ STATE_JS = r"""
   try { if (gc.getRoundId) out.roundId = gc.getRoundId(); } catch(e){}
   try { if (gc.countDownValue !== undefined) { out.countdown_raw = gc.countDownValue;
     out.countdown = (gc.getState && gc.getState() === 'counting down') ? gc.countDownValue : null; } } catch(e){}
-  try { if (gc.getTheme) out.theme = gc.getTheme(); } catch(e){}
+  try {
+    if (gc.getTheme) {
+      out.theme = gc.getTheme();
+      try {
+        const T = (typeof Constants !== 'undefined' && Constants.MAZE_THEMES) ? Constants.MAZE_THEMES : null;
+        if (T) for (const k in T) if (T[k] === out.theme) out.theme_name = k;
+      } catch(e) {}
+    }
+  } catch(e){}
   // 游戏暂停/时钟（v6）：窗口失焦/后台时 Phaser 会暂停，此时 set_input 会被静默忽略，
   // 但 phase/accepts_input 仍可能是 in round —— 必须能检测到。
   try {
@@ -185,25 +193,36 @@ STATE_JS = r"""
         // getX()/getY()（米）同一单位——前端 draw() 对 walls/tanks 用同一个
         // 缩放系数 s（由 maze.w*10 米推出）。历史上这里误用 T=200（像素），
         // 导致墙被放大 20 倍、几乎全部画到画布外（监控室"看不到地图"）。
+        //
+        // walls 正确规则（v6.3，2026-10-26 修正）：
+        //   * 只信每格自带的 topWall/leftWall 标志——**present 与 void 格都要读**；
+        //   * 不要为 void 格臆造 4 条边（旧实现会生成"两侧都是 void"的幽灵墙：
+        //     不渲染、无碰撞体，实测 53 条唯一边里 18 条是幽灵）；
+        //   * 也不要额外加整圈 border 矩形（边界墙已由贴边格的标志给出）。
+        // 按此规则与官方 projectile_path 物理探针逐段比对：31/31 全中，P=R=1.0。
         const td = m.getTiles(), T=10;
-        out.walls.push({x1:0,y1:0,x2:mw*T,y2:0});
-        out.walls.push({x1:0,y1:mh*T,x2:mw*T,y2:mh*T});
-        out.walls.push({x1:0,y1:0,x2:0,y2:mh*T});
-        out.walls.push({x1:mw*T,y1:0,x2:mw*T,y2:mh*T});
-        for (let x=0;x<mw;x++) for (let y=0;y<mh;y++) {
-          const tile = td[x] ? (td[x][y] || [0,0,0]) : [0,0,0];
-          const present=tile[0], topWall=tile[1], leftWall=tile[2];
-          const tx=x*T, ty=y*T;
-          if (present) {
-            if (topWall) out.walls.push({x1:tx,y1:ty,x2:tx+T,y2:ty});
-            if (leftWall) out.walls.push({x1:tx,y1:ty,x2:tx,y2:ty+T});
-          } else {
-            out.walls.push({x1:tx,y1:ty,x2:tx+T,y2:ty});
-            out.walls.push({x1:tx,y1:ty+T,x2:tx+T,y2:ty+T});
-            out.walls.push({x1:tx,y1:ty,x2:tx,y2:ty+T});
-            out.walls.push({x1:tx+T,y1:ty,x2:tx+T,y2:ty+T});
+        const seen = {};
+        const addWall = (x1,y1,x2,y2) => {
+          const a=(x1<=x2?x1:x2), b=(y1<=y2?y1:y2), c=(x1<=x2?x2:x1), d=(y1<=y2?y2:y1);
+          const k = a+','+b+','+c+','+d;
+          if (!seen[k]) { seen[k]=1; out.walls.push({x1:a,y1:b,x2:c,y2:d}); }
+        };
+        const cells = [];
+        for (let x=0;x<mw;x++) {
+          cells.push([]);
+          for (let y=0;y<mh;y++) {
+            const tile = td[x] ? (td[x][y] || [0,0,0]) : [0,0,0];
+            const present=tile[0]?1:0, topWall=tile[1]?1:0, leftWall=tile[2]?1:0;
+            cells[x].push([present, topWall, leftWall]);
+            const tx=x*T, ty=y*T;
+            if (topWall) addWall(tx,ty,tx+T,ty);
+            if (leftWall) addWall(tx,ty,tx,ty+T);
           }
         }
+        out.maze.cells = cells;      // [present, topWall, leftWall]，monitors 可用它恢复 floor/void
+        out.walls.sort(function(p,q){
+          return (p.x1-q.x1) || (p.y1-q.y1) || (p.x2-q.x2) || (p.y2-q.y2);
+        });
       }
     }
   } catch(e){}
