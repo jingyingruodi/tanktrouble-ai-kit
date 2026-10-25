@@ -1,8 +1,13 @@
 """
-ttkit —— TankTrouble 角色信息获取 / 操作封装包（黑盒 API **v6**）
+ttkit —— TankTrouble 角色信息获取 / 操作封装包（黑盒 API **v12**）
 ================================================================
 把"读取游戏状态"和"操作角色"封装成稳定、带文档的方法。所有控制都走游戏自己的
 `setInputState`（与人类按键等价，在线/本地都安全）。
+
+v12（第十一轮黑盒反馈，移动目标场景）：`lead_target` 增加 `interceptable/converged/shift/reason`
+（目标速度≥0.95×弹速或迭代发散 → 判不可拦截，不再给假提前量）；新增
+`path_dist_to_point()` / `find_aim_at_point()`（对**预测点**选角，不要求命中坦克本体）；
+`reachable_windows` 的 feasible 改为"窗口宽度≥min_width_deg 即可命中"（不再被 4.775° 网格硬否决）。
 
 v6（第五/六轮黑盒反馈）：`ammo()` 增加 `remaining = left - fired`（left 是弹匣容量！）；
 新增 `scores()/kills_of()/round_id()` 用于**比分归因**；`scan()` 增加 `include_targets`
@@ -82,6 +87,8 @@ def _wrap_pi(a):
     """把角度归一化到 [-π, π)。"""
     return (a + math.pi) % (2 * math.pi) - math.pi
 
+
+WEAPON_SPEED = {-1: 18.0, 0: 180.0, 1: 18.0, 2: 32.0, 3: 18.0, 4: 0.0, 5: 27.0}
 
 MAX_PATH_BOUNCES = 100
 # 反弹后路径离自己多近算"自伤风险"（米）。实测预测偏差可达 16m，取 4m 保守。
@@ -953,10 +960,199 @@ class Kit:
             pid, tuple(target_xy), target_id=target_id, require_bounce=require_bounce,
             max_traveled=float(max_traveled), max_bounces=cap, muzzle_offset=off)
 
+    async def target_velocity(self, target_id):
+        """目标坦克的线速度 (vx, vy)（米/秒）；读不到返回 None。"""
+        try:
+            return await self.bhv.get_tank_velocity(target_id)
+        except Exception:
+            return None
+
+    async def lead_target(self, pid, target_id, bullet_speed=None, max_iter=3,
+                          max_shift_m=60.0):
+        """移动目标提前量（含收敛/可拦截判定）。
+
+        返回 ``{'pos','velocity','shift','interceptable','converged','reason'}``：
+        * ``pos``：预测命中点；``shift``：预测点相对目标当前位置的位移（米）
+        * ``interceptable``：False 表示"追不上/发散"（目标速度 >= 0.95×弹速，或迭代发散），
+          此时 ``pos`` 为目标当前位置，调用方应换位/等对方转向，而不是硬打；
+        * ``converged``：迭代是否稳定（相邻两次 shift 变化 < 0.5m）。
+        """
+        await self._require(pid)
+        tpos = await self.position_confirm(target_id)
+        if tpos is None:
+            return None
+        if bullet_speed is None:
+            bullet_speed = BULLET_SPEED
+        bs = float(bullet_speed)
+        vel = await self.target_velocity(target_id)
+        speed = 0.0
+        if vel:
+            try:
+                speed = math.hypot(float(vel[0]), float(vel[1]))
+            except Exception:
+                speed = 0.0
+        if bs > 0 and speed >= bs * 0.95:
+            return {'pos': (float(tpos[0]), float(tpos[1])), 'velocity': vel,
+                    'shift': 0.0, 'interceptable': False, 'converged': False,
+                    'reason': 'target_too_fast'}
+        try:
+            pred = await self.bhv.predict_lead_target(pid, tuple(tpos),
+                                                      target_id=target_id,
+                                                      bullet_speed=bs,
+                                                      max_iter=int(max_iter))
+        except Exception:
+            pred = None
+        if pred is None:
+            return {'pos': (float(tpos[0]), float(tpos[1])), 'velocity': vel,
+                    'shift': 0.0, 'interceptable': speed <= bs * 0.5,
+                    'converged': False, 'reason': 'no_velocity'}
+        shift = math.hypot(float(pred[0]) - tpos[0], float(pred[1]) - tpos[1])
+        # 发散保护：提前量不应超过"目标沿速度跑 3 倍飞行时间"的常识上界
+        if shift > float(max_shift_m) or (speed > 0 and shift > 3.0 * speed):
+            return {'pos': (float(tpos[0]), float(tpos[1])), 'velocity': vel,
+                    'shift': shift, 'interceptable': False, 'converged': False,
+                    'reason': 'diverge'}
+        return {'pos': (float(pred[0]), float(pred[1])), 'velocity': vel,
+                'shift': float(shift),
+                'interceptable': True,
+                'converged': bool(shift < 0.5 * max(1.0, speed)),
+                'reason': None}
+
+    async def aim_at_moving(self, pid, target_id, fire_sec=0.6, bullet_speed=None,
+                            tol_m=1.7, max_attempts=3, **kw):
+        """对**移动目标**开火：lead_target → **对提前点选角** → 实际朝向复核（路径经过提前点）→ fire。
+
+        与 ``aim_and_fire`` 的区别：瞄准的是**预测命中点**而不是目标当前位置
+        （打移动靶时后者几乎必空）。返回 ``{'fired','reason','angle_deg','lead',
+        'path_dist','traveled','flight_time','verify','attempt'}``。
+        """
+        await self._require(pid)
+        lead = await self.lead_target(pid, target_id, bullet_speed=bullet_speed)
+        if lead is None:
+            return {'fired': False, 'reason': 'no_target', 'lead': None}
+        if not lead.get('interceptable'):
+            return {'fired': False, 'reason': 'not_interceptable', 'lead': lead,
+                    'angle_deg': None, 'path_dist': None, 'traveled': None,
+                    'flight_time': None, 'verify': None, 'attempt': 0}
+        point = lead['pos']
+        for attempt in range(1, int(max_attempts) + 1):
+            cands = await self.find_aim_at_point(pid, point, tol_m=tol_m,
+                                                 profile='relaxed',
+                                                 require_hit_tank=False)
+            if not cands:
+                cands = await self.find_aim_at_point(pid, point, tol_m=float(tol_m) * 2.0,
+                                                     profile='relaxed',
+                                                     require_hit_tank=False)
+            if not cands:
+                return {'fired': False, 'reason': 'no_aim_at_lead', 'lead': lead,
+                        'angle_deg': None, 'path_dist': None, 'traveled': None,
+                        'flight_time': None, 'verify': None, 'attempt': attempt}
+            best = cands[0]
+            await self.turn_to_angle(pid, best['angle_rad'], tol_deg=float(kw.get('tol_deg', 1.2)))
+            cur = await self.rotation(pid)
+            if cur is None:
+                continue
+            actual = cur - math.pi / 2
+            v = await self.raycast(pid, actual)
+            if v is None:
+                continue
+            pd = self.path_dist_to_point(v, point)
+            ok = bool(pd <= float(tol_m) * 1.3 and not v.get('self_hit')
+                      and v.get('self_risk_ok', True))
+            if not ok:
+                continue
+            ft = await self.flight_time(pid, float(v.get('traveled') or 0.0))
+            await self.fire(pid, fire_sec)
+            return {'fired': True, 'reason': None,
+                    'angle_deg': math.degrees(actual), 'lead': lead,
+                    'path_dist': float(pd), 'traveled': float(v.get('traveled') or 0.0),
+                    'flight_time': ft, 'verify': v, 'attempt': attempt}
+        return {'fired': False, 'reason': 'verify_failed', 'lead': lead,
+                'angle_deg': None, 'path_dist': None, 'traveled': None,
+                'flight_time': None, 'verify': None, 'attempt': int(max_attempts)}
+
+    async def flight_time(self, pid, traveled_m):
+        """按当前武器弹速估算飞行时间（秒）。"""
+        try:
+            w = await self.weapon(pid)
+            sp = WEAPON_SPEED.get(int(w), 18.0) if w is not None else 18.0
+        except Exception:
+            sp = 18.0
+        if not sp or sp <= 0:
+            return None
+        return float(traveled_m) / float(sp)
+
+    @staticmethod
+    def path_dist_to_point(path_or_item, point_xy):
+        """折线路径到某点的最小距离（米）。传 ``raycast`` 返回项或 path 列表均可。"""
+        try:
+            path = path_or_item.get('path') if isinstance(path_or_item, dict) else path_or_item
+            if not path or len(path) < 2:
+                if path and len(path) == 1:
+                    return math.hypot(path[0]['x'] - point_xy[0], path[0]['y'] - point_xy[1])
+                return 1e9
+            best = 1e9
+            for a, b in zip(path, path[1:]):
+                d = Kit._seg_dist(point_xy[0], point_xy[1], a['x'], a['y'], b['x'], b['y'])
+                if d < best:
+                    best = d
+            return best
+        except Exception:
+            return 1e9
+
+    async def find_aim_at_point(self, pid, point_xy, tol_m=1.7, steps=(30, 10, 5, 2),
+                               max_traveled=None, profile='relaxed',
+                               require_hit_tank=True):
+        """对**任意预测点**找开火角（移动目标必需）。
+
+        与 ``find_aim`` 的区别：不要求射线命中目标坦克本体，而是要求
+        **弹道折线经过 point_xy 附近**（``path_dist_to_point <= tol_m``）。
+        返回候选列表（按 path 距离 + quality 排序），每项含 ``path_dist``。
+
+        ``require_hit_tank=False`` 时允许"路径经过但没命中坦克"的解（打提前量时正常）。
+        """
+        await self._require(pid)
+        pos = await self.bhv.get_position(pid)
+        if pos is None:
+            return []
+        off = self._muzzle(await self.weapon(pid))
+        if max_traveled is None:
+            max_traveled = await self.bullet_range(pid)
+        out = []
+        for st in steps:
+            for deg in range(0, 360, max(1, int(st))):
+                d = await self.bhv._raycast_path(
+                    pos[0], pos[1], float(deg), 0.0, 0.0,
+                    max_bounces=MAX_PATH_BOUNCES, max_dist=float(max_traveled) * 1.5,
+                    target_tank_id=None, origin_offset=off)
+                it = self._mk_ray(pid, math.radians(deg), d, float(max_traveled), pos)
+                pd = self.path_dist_to_point(it, tuple(point_xy))
+                if pd > float(tol_m):
+                    continue
+                if it.get('self_hit'):
+                    continue
+                if not it.get('self_risk_ok', True):
+                    continue
+                if require_hit_tank and not it.get('hit'):
+                    continue
+                it['path_dist'] = float(pd)
+                it['tier'] = profile
+                out.append(it)
+            if out:
+                break
+        # 去重（同角度保留最优）后按 (路径距离, quality) 排序
+        seen = {}
+        for it in out:
+            key = round(math.degrees(it['angle_rad']), 1)
+            if key not in seen or (it['path_dist'], it['quality']) < (seen[key]['path_dist'], seen[key]['quality']):
+                seen[key] = it
+        res = sorted(seen.values(), key=lambda x: (x['path_dist'], x['quality']))
+        return res
+
     async def reachable_windows(self, pid, target_id=None, center_deg=0.0,
                                 span_deg=360.0, step_deg=0.5,
                                 quantum_deg=TURN_QUANTUM_DEG, profile=None,
-                                sort='distance'):
+                                sort='distance', min_width_deg=1.5):
         """扫描命中窗口，**并判断每个窗口里是否有"转向可达角"**（v8 核心）。
 
         转向量子约 4.775°：若窗口宽度 < 量子且不含网格点，则**物理上打不中**。
@@ -1032,6 +1228,9 @@ class Kit:
                     best = (dist, gd)
             tier = g[0][1]
             item = None
+            # 无网格点也允许：窗口宽度 >= min_width_deg 时取窗口中心角（turn_precise 可达 ~1°）
+            if best is None and width >= float(min_width_deg):
+                best = (0.0, (lo + hi) / 2.0)
             if best is not None:
                 gd = best[1] % 360.0
                 d = await self.bhv._raycast_path(
@@ -1049,7 +1248,10 @@ class Kit:
                         'bounces': (item.get('bounces') if item else None),
                         'traveled': (item.get('traveled') if item else None),
                         'item': item,
-                        'feasible': bool(item and item.get('hit'))})
+                        'feasible': bool(item and item.get('hit')),
+                        'grid_point': bool(best is not None and
+                                           abs((lo + hi) / 2.0 - best[1]) < float(step_deg)),
+                        'width_ok': bool(width >= float(min_width_deg))})
         def key(w):
             if w['grid_deg'] is None:
                 return (2, 1e9, 1e9, 0)

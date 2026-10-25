@@ -1,4 +1,4 @@
-# ttkit —— TankTrouble 角色控制黑盒工具包（v8）
+# ttkit —— TankTrouble 角色控制黑盒工具包（v11）
 
 本目录是**受限工作目录**：你只能读写本目录内的文件。`ttkit/` 用于**读取游戏状态**与
 **操作角色**；游戏已在运行（本地/在线），CDP 端口见 `config.json`（默认 62202）。
@@ -21,6 +21,17 @@ async def main():
 
 asyncio.run(main())
 ```
+
+## 1.5 本轮场景：**移动对手**（重要）
+
+本轮对手是**会移动的**（由外部脚本驱动，随机游走）。打固定靶 ≠ 打移动靶：
+
+* 弹丸飞到目标需要时间（基础弹 18 m/s → 80m 约 4.4s），目标会移动；
+* 必须用 **`lead_target(pid, target_id)`** 估算"弹丸到达时目标的位置"，
+  再对该预测位置做选角/瞄准/复核；
+* 或者直接用 **`aim_at_moving(pid, target_id)`**（= lead_target + aim_and_fire 完整开火门）；
+* `target_velocity(target_id)` 可读目标实时速度（米/秒）；
+* 命中判定用 `kills_of()` 比分增量（飞行时间可能数秒，别过早判 miss）。
 
 ## 2. 关键机制与约定
 
@@ -88,8 +99,11 @@ asyncio.run(main())
 | `is_good_candidate(item, pid, target_id, profile='strict')` | 策略判定；`Kit.PROFILES` 可查 |
 | `find_aim(pid,(tx,ty),target_id=opp)` | 找命中角 |
 | `scan_region(pid, center_deg, span_deg=20, step_deg=0.5, target_id=None)` | **v7**：指定区域 0.5° 细扫（补 2° 网格漏掉的 0.5~1° 窄窗口） |
+| `target_velocity(target_id)` | **v11**：目标线速度 `(vx,vy)`（米/秒） |
+| `lead_target(pid, target_id, bullet_speed=None)` | **v11**：提前量预测 → `{'pos','velocity','dist'}`；对**移动目标**必须先取这个 pos 再瞄准 |
+| `aim_at_moving(pid, target_id, fire_sec=0.6)` | **v11**：lead_target + `aim_and_fire` 完整开火门 |
 | `reachable_windows(pid, target_id=None, center_deg=0, span_deg=360, step_deg=0.5)` | **v8 核心**：扫描命中窗口并判断每窗内是否有可达网格角；返回 `{window_start/end_deg, width_deg, grid_deg, tier, item, feasible}`，按「可行+离当前朝向近+窗口宽」排序 |
-| `fine_aim(pid, target_id, center_rad, span_deg=10, step_deg=0.25, profile=None, ref_bounces=?, ref_traveled=?, same_family=True, snap=True)` | **v8**：`snap=True` 时返回**保证命中**的项（在可达网格角上复核过；无解返回 None，绝不返回 `hit=False`）；也返回 `window` 宽度、`snapped_deg` |
+| `fine_aim(pid, target_id, center_rad, span_deg=10, step_deg=0.25, profile=None, ref_bounces=?, ref_traveled=?, same_family=True, snap=True)` | **v9**：`snap=True` 时返回**保证命中**的项（可达网格角复核过，无解返回 None，绝不返回 `hit=False`）；找不到时会自动扩大搜索半径（60→120→360°）重试；返回 `window`、`snapped_deg`、`search_span_deg` |
 | `aim_and_fire(pid,(tx,ty),target_id=opp,...)` | 转向 → 实际朝向复核 →（失败）fine_aim 微调 → 通过才开火 |
 
 `quality = traveled + 30×bounces + 5×max(0, 20-self_risk)`（越小越可靠）。
@@ -137,3 +151,4 @@ asyncio.run(main())
 * 死亡判定 0.2~0.4s 滞后；`position()/rotation()` 可能瞬时 None（已重试）。
 * `navigate_to` 慢（~1.5~7 m/s）且打印 `[nav]`；用 `navigate_segment` 分段。
 * 在线输入上报粒度 0.5s（hold ≥0.6s）；本地可更短。
+
