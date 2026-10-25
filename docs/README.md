@@ -46,6 +46,7 @@
 | [21](21-Linux适配审查-2026-10-25.md) | **Linux 适配审查（Debian 实机复检）** | `68db7b0` 复检：安装 BLOCKER 已修；9 条 MAJOR 仍在（ego state 目录、`TT_CDP_PORT`、Xvfb 配方、两个自检、`launch_cdp` 假成功/丢 URL、`kill_monitor` 误杀、文档夸大）+ 修复带出的 4 条 MINOR，附复现命令与优先级 |
 | [22](22-Linux适配审查-复检2-2026-10-25.md) | **Linux 适配审查·复检 2** | 验证 `a9e5ac0` 的修复：9 条 MAJOR → **6 PASS / 1 PARTIAL / 2 FAIL**；安装+全链路 e2e 首次 PASS；M4 自检在 Linux 恒红、M6 假成功仍在；8 条新增/残余问题与 P0/P1/P2 修法 |
 | [23](23-Linux适配审查-复检3-2026-10-25.md) | **Linux 适配审查·复检 3** | 验证 `369e8c9` 的二次修复：M4 24 项 PASS（闭环）、e2e 再次 PASS、N3/N4/N5/N8 PASS；**M6 循环耗尽仍假成功**、N9 因 `terminate` 重复定义失效、N10 rc=0、profile 迁移与多处文档残留 |
+| [24](24-Linux适配审查-复检4-2026-10-25.md) | **Linux 适配审查·复检 4（关闭）** | 验证 `7e83d6b`：docs/23 的 12 项**全部 PASS**（M6 五场景、terminate 生效、退出码、env 边界、迁移提示、自检 25 项）→ 0 BLOCKER/MAJOR，仅 3 个 NIT；**Linux 适配可判「实测可用」并关闭** |
 
 ---
 
