@@ -12,7 +12,7 @@ REM ---------- 配置区 ----------
 set TT_PORT=9223
 REM ----------------------------
 
-cd /d "D:\AI Agent\tanktrouble_ai"
+cd /d "%~dp0"
 
 echo ========================================
 echo  TankTrouble AI — 持续自杀（不录制）

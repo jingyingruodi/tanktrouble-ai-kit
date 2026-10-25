@@ -1,3 +1,13 @@
+# =============================================================================
+# TankTrouble AI Research Kit — 免责声明 / DISCLAIMER  [DISCLAIMER-STAMP]
+# 仅供学习、教学与学术研究（AI/游戏交互接口、行为 AI、弹道与火控建模）使用。
+# 与 TankTrouble 及其开发方无任何关联；不含任何游戏资源；
+# 按 MIT 许可"原样"提供，不附带任何担保。详见 NOTICE / RISK-ASSESSMENT.md。
+# 禁止用于公开在线对局作弊或任何违反官方社区规则的行为
+# （官方 Community Standards 第 8 条 "No hacking on the website"：
+#   零容忍，可永久封号且无警告）。在线相关脚本另见文件内附加说明。
+# For education & academic research only. No online public matches. No affiliation.
+# =============================================================================
 """
 TankTrouble CDP Edge Launcher (CDP 启动浏览器窗口)
 ====================================================
@@ -22,8 +32,11 @@ import subprocess
 import sys
 import time
 
-EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-PROFILE_BASE = r"C:\tt-cdp"          # 不能含空格！
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cdp_tools'))
+from platform_utils import find_browser, profile_base, no_sandbox_flags, is_windows  # noqa: E402
+
+EDGE = find_browser()
+PROFILE_BASE = profile_base()
 PORT_DEFAULT = 9222
 URL_DEFAULT = "https://tanktrouble.com/game"
 
@@ -39,9 +52,23 @@ ANTI_FREEZE_FLAGS = [
     "--no-first-run",
     "--no-default-browser-check",
 ]
+EXTRA_FLAGS = no_sandbox_flags()   # Linux root 自动 --no-sandbox（或 TT_CHROME_NO_SANDBOX=1）
 
 
 def main():
+    if '--check' in sys.argv:
+        print('[check] platform =', sys.platform)
+        print('[check] browser  =', EDGE)
+        print('[check] exists   =', bool(EDGE and os.path.exists(EDGE)))
+        print('[check] profile  =', PROFILE_BASE)
+        print('[check] flags    =', EXTRA_FLAGS)
+        if not EDGE:
+            print('[check] ❌ 未找到 Edge/Chrome/Chromium；请设置 TT_BROWSER 指向可执行文件')
+            return 2
+        return 0
+    if not EDGE:
+        print('[launch] ❌ 未找到浏览器，请设置 TT_BROWSER（Edge/Chrome/Chromium 路径）', flush=True)
+        return 2
     port = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else PORT_DEFAULT
     url = sys.argv[2] if len(sys.argv) > 2 else URL_DEFAULT
     profile_dir = os.path.join(PROFILE_BASE, f'p{port - 9222}') if port >= 9222 else os.path.join(PROFILE_BASE, f'p{port}')
@@ -51,6 +78,7 @@ def main():
         f'--remote-debugging-port={port}',
         f'--user-data-dir={profile_dir}',
         *ANTI_FREEZE_FLAGS,
+        *EXTRA_FLAGS,
         '--new-window',
         url,
     ]
@@ -74,7 +102,7 @@ def main():
 
     # 聚焦新 Edge 窗口，让游戏标签页保持 ACTIVE（Edge 会冻结不可见/
     # 后台标签页 -> 游戏暂停）。把匹配的窗口带到前台。
-    if ready:
+    if ready and is_windows():
         time.sleep(1.5)
         try:
             ps = (

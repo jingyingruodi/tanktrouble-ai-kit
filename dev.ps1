@@ -1,3 +1,13 @@
+# =============================================================================
+# TankTrouble AI Research Kit — 免责声明 / DISCLAIMER  [DISCLAIMER-STAMP]
+# 仅供学习、教学与学术研究（AI/游戏交互接口、行为 AI、弹道与火控建模）使用。
+# 与 TankTrouble 及其开发方无任何关联；不含任何游戏资源；
+# 按 MIT 许可"原样"提供，不附带任何担保。详见 NOTICE / RISK-ASSESSMENT.md。
+# 禁止用于公开在线对局作弊或任何违反官方社区规则的行为
+# （官方 Community Standards 第 8 条 "No hacking on the website"：
+#   零容忍，可永久封号且无警告）。在线相关脚本另见文件内附加说明。
+# For education & academic research only. No online public matches. No affiliation.
+# =============================================================================
 # ============================================
 #  TankTrouble AI — 开发/测试快捷命令
 #  用法: .\dev.ps1 <命令> [参数]
@@ -40,6 +50,6 @@ switch ($Cmd.ToLower()) {
     'farm'   { python (Join-Path $Root 'tt.py') farm $Arg1 }
     'test'   { python (Join-Path $Root 'tt.py') test $Arg1 $Arg2 }
     'suicide' { python (Join-Path $Root 'tt.py') suicide $Arg1 $Arg2 }
-    'docs'   { Start-Process "D:\AI Agent\tanktrouble_ai\docs\README.md" }
+    'docs'   { Start-Process "$PSScriptRoot\docs\README.md" }
     default  { Show-Help }
 }

@@ -54,6 +54,40 @@ cd kit && python -c "import asyncio; from ttkit import Kit; ..." # 见 kit/READM
 | 行为 AI 命中率 | 静止靶（小图）最高 **100%**；移动靶：朴素打法 16% → 提前量+对点选角 **67%** |
 | 控错角色 | 11 轮黑盒测试全部"只控自己 pid"（需应用层护栏，包只校验"可控角色"） |
 
+
+## 监控室 / 录制 / 回放
+
+```bash
+python monitor_server.py 1 auto                     # 监控室数据源（WS 9310+，auto 端口）
+python scripts/selftest_monitor.py                  # 全链路自检：监控→录制→回放→清理
+python scripts/record_only.py auto --out data/demo.jsonl --fps 20 --compress
+python playback_server.py data/demo.jsonl 9314 --fps 20   # 作为"回放实例"接入监控室
+python scripts/kill_monitor.py                      # 清理 monitor/playback 进程
+```
+
+打开 `tanktrouble_monitor.html`（自动发现 9310–9317 实例）即可看到实时状态与回放；
+监控室页面与游戏页请放在**同一浏览器的不同标签页**（同标签页导航会让监控源失去游戏上下文）。
+bat 快捷入口使用 `%~dp0` 相对路径，可移植。
+
+
+## Linux 支持
+
+跨平台已适配（Windows / macOS / Linux）：浏览器自动探测、profile 目录按平台取
+（Linux `~/.cache/tt-cdp`）、进程清理跨平台、`TT_BROWSER` / `TT_CDP_PORT` /
+`TT_CDP_PROFILE_BASE` / `TT_CHROME_NO_SANDBOX` 环境变量。
+
+```bash
+chmod +x setup-linux.sh launch-browser.sh start-monitor.sh kill-monitor.sh
+./setup-linux.sh                    # 依赖 + 浏览器探测
+./launch-browser.sh 9222            # 带 CDP 启动并打开游戏
+./start-monitor.sh                  # 监控室
+python3 scripts/selftest_platform.py   # 跨平台自检（应 PASS）
+python3 scripts/selftest_monitor.py    # 监控/录制/回放自检（需游戏在局中）
+```
+
+无显示器的服务器用 `xvfb-run -s "-screen 0 1280x800x24" python3 launch_cdp.py 9222`。
+详见 [docs/20-Linux适配.md](docs/20-Linux适配.md)。`.bat`/`dev.ps1` 仅 Windows；Linux 用 `.sh`。
+
 ## 许可
 
 代码采用 **MIT License**（见 [LICENSE](LICENSE)）。MIT **只覆盖本仓库作者原创的代码**，

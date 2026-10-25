@@ -9,14 +9,14 @@ setlocal
 
 REM ---------- 配置区 ----------
 set TT_PORT=9222
-set REC_FILE=D:\AI Agent\tanktrouble_ai\data\demo3.jsonl
+set REC_FILE=%~dp0data\demo3.jsonl
 set REC_FPS=60
 set COMPRESS=1
 REM   COMPRESS=1 压缩（地形只在回合切换写），0=全量
 REM ----------------------------
 
-cd /d "D:\AI Agent\tanktrouble_ai"
-if not exist "D:\AI Agent\tanktrouble_ai\data" mkdir "D:\AI Agent\tanktrouble_ai\data"
+cd /d "%~dp0"
+if not exist "%~dp0data" mkdir "%~dp0data"
 
 echo ========================================
 echo  TankTrouble AI — 仅录制

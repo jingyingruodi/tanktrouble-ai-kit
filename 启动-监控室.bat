@@ -10,7 +10,7 @@ REM    python playback_server.py <录制.jsonl> 9314 --loop
 REM =====================================================
 setlocal
 
-cd /d "D:\AI Agent\tanktrouble_ai"
+cd /d "%~dp0"
 
 echo ========================================
 echo  TankTrouble AI — 监控室
@@ -40,13 +40,13 @@ timeout /t 6 /nobreak >nul
 
 REM ---------- 2. 启动 monitor_server ----------
 echo [2/3] 启动 monitor_server...
-start "TT-Monitor" cmd /k "cd /d D:\AI Agent\tanktrouble_ai && python monitor_server.py 3 9222 --tm 1"
+start "TT-Monitor" cmd /k "python monitor_server.py 3 9222 --tm 1"
 
 timeout /t 4 /nobreak >nul
 
 REM ---------- 3. 打开监控室页面 ----------
 echo [3/3] 打开监控室页面...
-start "" "D:\AI Agent\tanktrouble_monitor.html"
+start "" "%~dp0tanktrouble_monitor.html"
 
 echo.
 echo [提示] 页面已打开。点 "🔍自动发现" 自动配置实例数。

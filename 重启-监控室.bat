@@ -15,7 +15,7 @@ REM  注意：不会动自杀脚本 / 录制脚本（只恢复"监控"相关进�
 REM =====================================================
 setlocal
 
-cd /d "D:\AI Agent\tanktrouble_ai"
+cd /d "%~dp0"
 
 echo ========================================
 echo  TankTrouble AI — 重启监控室
@@ -48,13 +48,13 @@ timeout /t 2 /nobreak >nul
 
 REM ---------- 3. 启动 monitor_server ----------
 echo [3/4] 启动 monitor_server（3 CDP + 1 TM）...
-start "TT-Monitor" cmd /k "cd /d D:\AI Agent\tanktrouble_ai && python monitor_server.py 3 9222 --tm 1"
+start "TT-Monitor" cmd /k "python monitor_server.py 3 9222 --tm 1"
 
 timeout /t 4 /nobreak >nul
 
 REM ---------- 4. 打开监控室页面 ----------
 echo [4/4] 打开监控室页面...
-start "" "D:\AI Agent\tanktrouble_monitor.html"
+start "" "%~dp0tanktrouble_monitor.html"
 
 echo.
 echo [提示] 监控室已重启。

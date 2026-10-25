@@ -17,17 +17,17 @@ setlocal
 
 REM ---------- 配置区（改这里） ----------
 set TT_PORT=9222
-set REC_FILE=D:\AI Agent\tanktrouble_ai\data\record.jsonl
+set REC_FILE=%~dp0data\record.jsonl
 set REC_FPS=20
 set COMPRESS=1
 set MONITOR=0
 set PLAYBACK=0
 REM --------------------------------------
 
-cd /d "D:\AI Agent\tanktrouble_ai"
+cd /d "%~dp0"
 
 REM 创建数据目录
-if not exist "D:\AI Agent\tanktrouble_ai\data" mkdir "D:\AI Agent\tanktrouble_ai\data"
+if not exist "%~dp0data" mkdir "%~dp0data"
 
 echo ========================================
 echo  TankTrouble AI — 持续自杀 + 录制
@@ -38,7 +38,7 @@ echo.
 REM 可选：启动监控室（后台窗口）
 if "%MONITOR%"=="1" (
     echo [启动] 监控室 monitor_server...
-    start "TT-Monitor" cmd /c "cd /d D:\AI Agent\tanktrouble_ai && python monitor_server.py 3 9222 --tm 1"
+    start "TT-Monitor" cmd /c "python monitor_server.py 3 9222 --tm 1"
     timeout /t 3 /nobreak >nul
     echo [提示] 浏览器打开 tanktrouble_monitor.html 查看监控画面（自动发现，回放端口9314）
     echo.
@@ -47,7 +47,7 @@ if "%MONITOR%"=="1" (
 echo [启动] 持续自杀 + 录制...
 echo [提示] 按 Ctrl+C 停止
 echo.
-cd /d "D:\AI Agent\tanktrouble_ai"
+cd /d "%~dp0"
 if "%COMPRESS%"=="1" (
     python scripts\loop_suicide.py %TT_PORT% --record "%REC_FILE%" --fps %REC_FPS% --compress
 ) else (

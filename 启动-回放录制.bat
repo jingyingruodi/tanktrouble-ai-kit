@@ -9,12 +9,12 @@ REM =====================================================
 setlocal
 
 REM ---------- 配置区 ----------
-set REC_FILE=D:\AI Agent\tanktrouble_ai\data\fire_demo.jsonl
+set REC_FILE=%~dp0data\fire_demo.jsonl
 set PLAY_PORT=9314
 set PLAY_FPS=20
 REM ----------------------------
 
-cd /d "D:\AI Agent\tanktrouble_ai"
+cd /d "%~dp0"
 
 echo ========================================
 echo  TankTrouble AI — 录制回放

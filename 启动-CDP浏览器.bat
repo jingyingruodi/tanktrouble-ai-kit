@@ -15,7 +15,7 @@ set PORT=9222
 set URL=https://tanktrouble.com/game
 REM ----------------------------
 
-cd /d "D:\AI Agent\tanktrouble_ai"
+cd /d "%~dp0"
 
 echo ========================================
 echo  TankTrouble AI — CDP 浏览器启动

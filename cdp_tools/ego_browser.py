@@ -1,3 +1,13 @@
+# =============================================================================
+# TankTrouble AI Research Kit — 免责声明 / DISCLAIMER  [DISCLAIMER-STAMP]
+# 仅供学习、教学与学术研究（AI/游戏交互接口、行为 AI、弹道与火控建模）使用。
+# 与 TankTrouble 及其开发方无任何关联；不含任何游戏资源；
+# 按 MIT 许可"原样"提供，不附带任何担保。详见 NOTICE / RISK-ASSESSMENT.md。
+# 禁止用于公开在线对局作弊或任何违反官方社区规则的行为
+# （官方 Community Standards 第 8 条 "No hacking on the website"：
+#   零容忍，可永久封号且无警告）。在线相关脚本另见文件内附加说明。
+# For education & academic research only. No online public matches. No affiliation.
+# =============================================================================
 """
 dsh-ego-browser 接入层 —— 动态 CDP 端口发现
 ============================================
@@ -23,6 +33,7 @@ dsh-ego-browser（DSH 的浏览器插件）用 Edge 启动一个**常驻单例�
 """
 import json
 import os
+import sys
 import urllib.request
 
 # ego 浏览器 state 目录候选（不同 runtime 命名/平台）
@@ -38,7 +49,12 @@ def state_dirs():
     env = os.environ.get('EGO_BROWSER_STATE_DIR')
     if env:
         dirs.append(env)
-    base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~\\AppData\\Local')
+    if sys.platform.startswith('win'):
+        base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~\\AppData\\Local')
+    elif sys.platform == 'darwin':
+        base = os.path.expanduser('~/Library/Application Support')
+    else:
+        base = os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share')
     for name in STATE_DIR_NAMES:
         dirs.append(os.path.join(base, name))
     return dirs
@@ -101,6 +117,8 @@ def discover(preferred=None, scan_start=DEFAULT_SCAN_START, scan_end=DEFAULT_SCA
     返回 dict：{port, source, browser, info|None, pages|[], game_page|None, error|None}
     找不到时 port=None。
     """
+    if preferred is None:
+        preferred = os.environ.get('TT_CDP_PORT') or None
     result = {'port': None, 'source': None, 'browser': None, 'info': None,
               'pages': [], 'game_page': None, 'error': None}
 

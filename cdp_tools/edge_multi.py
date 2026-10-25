@@ -1,3 +1,13 @@
+# =============================================================================
+# TankTrouble AI Research Kit — 免责声明 / DISCLAIMER  [DISCLAIMER-STAMP]
+# 仅供学习、教学与学术研究（AI/游戏交互接口、行为 AI、弹道与火控建模）使用。
+# 与 TankTrouble 及其开发方无任何关联；不含任何游戏资源；
+# 按 MIT 许可"原样"提供，不附带任何担保。详见 NOTICE / RISK-ASSESSMENT.md。
+# 禁止用于公开在线对局作弊或任何违反官方社区规则的行为
+# （官方 Community Standards 第 8 条 "No hacking on the website"：
+#   零容忍，可永久封号且无警告）。在线相关脚本另见文件内附加说明。
+# For education & academic research only. No online public matches. No affiliation.
+# =============================================================================
 """
 TankTrouble 多实例训练管理器
 ============================
@@ -6,7 +16,7 @@ TankTrouble 多实例训练管理器
 支持针对真实游戏服务器的并行训练，互不冲突。
 
 重要：--user-data-dir 路径【不能含空格】。
-每个实例独立端口（9222, 9223, ...）和独立 profile 目录（C:\tt-cdp-0, ...）。
+每个实例独立端口（9222, 9223, ...）和独立 profile 目录（<TT_CDP_PROFILE_BASE>/0, ...）。
 
 用法：
     from edge_multi import EdgeFarm
@@ -23,8 +33,10 @@ import json
 import subprocess
 import asyncio
 
-EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-PROFILE_BASE = r"C:\tt-cdp"       # 不能含空格！
+from platform_utils import find_browser, profile_base  # noqa: E402
+
+EDGE = find_browser()
+PROFILE_BASE = profile_base()
 PORT_BASE = 9222
 
 class EdgeInstance:

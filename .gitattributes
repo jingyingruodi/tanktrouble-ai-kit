@@ -1,0 +1,12 @@
+# 跨平台换行规范：确保 Linux 的 .sh 在任意平台 checkout 都是 LF
+* text=auto
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+
+# 二进制/数据
+*.png  binary
+*.zip  binary
+*.jsonl binary
