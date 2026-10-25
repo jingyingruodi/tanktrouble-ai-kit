@@ -46,7 +46,18 @@ async def main():
     me = None
     try:
         me = await p.my_pid()
+        # 等待进入 in round（刚重启时可能还在 counting down / between rounds）
         st = await p.state()
+        for _ in range(40):
+            if st.get('phase') == 'in round' and st.get('accepts_input') is not False:
+                break
+            await asyncio.sleep(0.5)
+            st = await p.state()
+        if st.get('phase') != 'in round':
+            await p.accepts_input()
+            await asyncio.sleep(1.0)
+            st = await p.state()
+        print('phase at start:', st.get('phase'))
         print('== 1) state 新字段 ==')
         for k in ('phase', 'roundId', 'countdown', 't_ms'):
             print('  %-10s = %r' % (k, st.get(k)))
