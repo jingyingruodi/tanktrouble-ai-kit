@@ -1,0 +1,24 @@
+TankTrouble AI Research Kit
+Copyright (c) 2026 jingyingruodi
+
+This product is an independent, unofficial research project. It is NOT affiliated
+with, endorsed by, sponsored by, or approved by TankTrouble or its developers,
+publishers, or rights holders. "TankTrouble" and related names, logos, and game
+assets are the property of their respective owners.
+
+NO GAME ASSETS ARE INCLUDED. This repository contains only original source code,
+measurement scripts, and research notes authored for this project. It does not
+contain, and must not be used to redistribute, any game client code, assets,
+sounds, artwork, or map data.
+
+The software is provided "AS IS", without warranty of any kind, express or
+implied. In no event shall the authors be liable for any claim, damages, or other
+liability arising from the use of the software or from any violation of a third
+party's terms of service.
+
+INTENDED USE: local, single-player, or self-created private rooms for research,
+education, and software testing. Use in public online multiplayer games may
+violate the game's Terms of Service / EULA and may result in account suspension
+or ban. Do not use this project to gain an unfair advantage over other players.
+
+Third-party components: the `websockets` Python package (BSD-3-Clause).

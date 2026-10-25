@@ -18,3 +18,9 @@ scripts/scratch/
 # ---- 其它 ----
 .DS_Store
 Thumbs.db
+
+# ---- 打包产物 ----
+dist/
+*.zip
+*.7z
+
