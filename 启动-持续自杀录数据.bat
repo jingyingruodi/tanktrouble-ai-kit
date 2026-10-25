@@ -17,6 +17,7 @@ setlocal
 
 REM ---------- 配置区（改这里） ----------
 set TT_PORT=9222
+if not "%TT_CDP_PORT%"=="" set TT_PORT=%TT_CDP_PORT%
 set REC_FILE=%~dp0data\record.jsonl
 set REC_FPS=20
 set COMPRESS=1
@@ -39,7 +40,7 @@ REM 可选：启动监控室（后台窗口）
 if "%MONITOR%"=="1" (
     echo [启动] 监控室 monitor_server...
     start "TT-Monitor" cmd /c "python monitor_server.py 3 9222 --tm 1"
-    timeout /t 3 /nobreak >nul
+    ping -n 4 127.0.0.1 >nul
     echo [提示] 浏览器打开 tanktrouble_monitor.html 查看监控画面（自动发现，回放端口9314）
     echo.
 )

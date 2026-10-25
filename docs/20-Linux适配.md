@@ -116,3 +116,22 @@ python3 scripts/selftest_monitor.py      # 监控/录制/回放（需游戏在�
 - profile 目录从 `%LOCALAPPDATA%` 改为 XDG cache；
 - 进程管理从 wmic/taskkill 改为 `ps` + 信号；
 - 浏览器候选从 Edge/Chrome 安装路径改为常见发行版路径 + `PATH` 查找。
+
+## 10. 依赖安装（PEP 668 说明）与脚本验证状态
+
+Ubuntu 23.04+ / Debian 12+ 的系统 Python 处于 "externally-managed" 状态，
+`pip install --user` 会报 `externally-managed-environment`。请用 `setup-linux.sh`：
+它会创建 `.venv` 并安装依赖；`launch-browser.sh` / `start-monitor.sh` / `kill-monitor.sh`
+会自动 `source .venv/bin/activate`。手动运行 Python 脚本前请先：
+
+```bash
+source .venv/bin/activate
+```
+
+**脚本验证状态（2026-10-25）**：
+- 4 个 `.sh` 经 WSL 内真实 POSIX `sh -n` 检查：全部语法通过；LF 换行；
+- 脚本内引用的 `launch_cdp.py` / `monitor_server.py` / `tanktrouble_monitor.html` /
+  `requirements.txt` / `scripts/kill_monitor.py` / `selftest_*.py` 均确认存在；
+- ✅ 8 个 `.bat` 已在 Windows 上逐个**实际执行**并验证效果（记录见
+  [03-监控室与数据采集 §9](03-监控室与数据采集.md)）；
+- ⏳ Linux 实机执行仍需你按 §7 自检命令确认（本机无 Linux 设备）。

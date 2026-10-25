@@ -9,6 +9,7 @@ setlocal
 
 REM ---------- 配置区 ----------
 set TT_PORT=9222
+if not "%TT_CDP_PORT%"=="" set TT_PORT=%TT_CDP_PORT%
 set REC_FILE=%~dp0data\demo3.jsonl
 set REC_FPS=60
 set COMPRESS=1

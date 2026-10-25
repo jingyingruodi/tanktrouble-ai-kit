@@ -14,6 +14,11 @@
 #   ./start-monitor.sh 3 9222       # 3 个 CDP 实例，基准端口 9222
 set -euo pipefail
 cd "$(dirname "$0")"
+# 若存在 .venv 则自动激活（setup-linux.sh 会创建）
+if [ -f "$(dirname "$0")/.venv/bin/activate" ]; then
+  # shellcheck disable=SC1091
+  . "$(dirname "$0")/.venv/bin/activate"
+fi
 
 CDP_COUNT="${1:-1}"
 CDP_PORT="${2:-auto}"

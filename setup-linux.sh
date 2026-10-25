@@ -16,8 +16,15 @@ cd "$(dirname "$0")"
 echo "[1/3] Python 版本"
 python3 --version
 
-echo "[2/3] 安装 Python 依赖（websockets）"
-python3 -m pip install --user -r requirements.txt
+echo "[2/3] 创建虚拟环境并安装依赖（避免 PEP 668 externally-managed 限制）"
+if [ ! -d .venv ]; then
+  python3 -m venv .venv
+fi
+./.venv/bin/python -m pip install --upgrade pip >/dev/null 2>&1 || true
+./.venv/bin/python -m pip install -r requirements.txt
+
+echo "[提示] 已创建 .venv；其它 .sh 脚本会自动激活它。手动运行 python 脚本时："
+echo "        source .venv/bin/activate"
 
 echo "[3/3] 浏览器探测"
 python3 launch_cdp.py --check || true

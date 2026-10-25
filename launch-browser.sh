@@ -15,6 +15,11 @@
 #   TT_BROWSER=/usr/bin/chromium ./launch-browser.sh 9222
 set -euo pipefail
 cd "$(dirname "$0")"
+# 若存在 .venv 则自动激活（setup-linux.sh 会创建）
+if [ -f "$(dirname "$0")/.venv/bin/activate" ]; then
+  # shellcheck disable=SC1091
+  . "$(dirname "$0")/.venv/bin/activate"
+fi
 
 PORT="${1:-9222}"
 URL="${2:-https://tanktrouble.com/game}"

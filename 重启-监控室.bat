@@ -24,37 +24,36 @@ echo ========================================
 echo.
 
 REM ---------- 1. 检查/启动 CDP 浏览器 ----------
+REM ---------- 配置区（可用环境变量覆盖） ----------
+set CDP_PORTS=9222 9223 9224
+set MONITOR_CDP=9222
+set MONITOR_COUNT=3
+set MONITOR_TM=1
+if not "%TT_CDP_PORT%"=="" (
+    set CDP_PORTS=%TT_CDP_PORT%
+    set MONITOR_CDP=%TT_CDP_PORT%
+    set MONITOR_COUNT=1
+)
+REM --------------------------------------
+
 echo [1/4] 检查 CDP 浏览器实例...
-python -c "import urllib.request,subprocess,os
-alive=[]
-for p in (9222,9223,9224):
-    try:
-        urllib.request.urlopen(f'http://127.0.0.1:{p}/json/version', timeout=1)
-        alive.append(p)
-    except Exception:
-        pass
-for p in (9222,9223,9224):
-    if p not in alive:
-        print(f'启动 CDP {p} ...')
-        subprocess.Popen(['python','launch_cdp.py',str(p),'https://tanktrouble.com/game'], cwd=os.getcwd())
-print('CDP 就绪:', alive)
-"
-timeout /t 5 /nobreak >nul
+python scripts\ensure_browsers.py %CDP_PORTS%
+ping -n 3 127.0.0.1 >nul
 
 REM ---------- 2. 清理残留监控进程 ----------
 echo [2/4] 清理残留监控进程...
 python scripts\kill_monitor.py
-timeout /t 2 /nobreak >nul
+ping -n 3 127.0.0.1 >nul
 
 REM ---------- 3. 启动 monitor_server ----------
 echo [3/4] 启动 monitor_server（3 CDP + 1 TM）...
-start "TT-Monitor" cmd /k "python monitor_server.py 3 9222 --tm 1"
+start "TT-Monitor" cmd /k "python monitor_server.py %MONITOR_COUNT% %MONITOR_CDP% --tm %MONITOR_TM%"
 
-timeout /t 4 /nobreak >nul
+ping -n 5 127.0.0.1 >nul
 
 REM ---------- 4. 打开监控室页面 ----------
 echo [4/4] 打开监控室页面...
-start "" "%~dp0tanktrouble_monitor.html"
+if not "%TT_SKIP_OPEN%"=="1" start "" "%~dp0tanktrouble_monitor.html"
 
 echo.
 echo [提示] 监控室已重启。

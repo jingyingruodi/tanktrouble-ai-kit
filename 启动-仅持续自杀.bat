@@ -10,6 +10,7 @@ setlocal
 
 REM ---------- 配置区 ----------
 set TT_PORT=9223
+if not "%TT_CDP_PORT%"=="" set TT_PORT=%TT_CDP_PORT%
 REM ----------------------------
 
 cd /d "%~dp0"
