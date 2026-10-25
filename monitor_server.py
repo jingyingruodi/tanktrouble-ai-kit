@@ -103,6 +103,10 @@ STATE_JS = r"""
   const gmObj = (typeof GameManager !== 'undefined') ? GameManager : null;
   const gc = gmObj ? (gmObj.getGameController ? gmObj.getGameController() : (gmObj.gameController || null)) : null;
   if (!gc) return {err: (gmObj ? 'no gc' : 'no GameManager')};
+  out.t_ms = Date.now();
+  try { if (gc.getState) out.phase = gc.getState(); } catch(e){}
+  try { if (gc.getRoundId) out.roundId = gc.getRoundId(); } catch(e){}
+  try { if (gc.countDownValue !== undefined) out.countdown = gc.countDownValue; } catch(e){}
   try { if (gc.isRoundActive) out.active = gc.isRoundActive(); } catch(e){}
   // allPlayerIds: use getActivePlayerIds() directly.
   // - Includes players who died but are still in the room (their kills still score).
@@ -130,8 +134,13 @@ STATE_JS = r"""
       try { const su = gc.getUpgradeByPlayerIdAndType ? gc.getUpgradeByPlayerIdAndType(id, 2) : null;
         if (su) { shield = true; const flds = su.getFields ? su.getFields() : null;
           if (flds && typeof flds._lifetime === 'number') shieldLife = flds._lifetime; } } catch(e){}
+      let vx = 0, vy = 0;
+      try { const b = t.getB2DBody ? t.getB2DBody() : null;
+        const v = b ? b.GetLinearVelocity() : null;
+        if (v) { vx = v.x || 0; vy = v.y || 0; } } catch(e){}
       out.tanks[id] = {x: t.getX ? t.getX() : 0, y: t.getY ? t.getY() : 0,
-        angle: rot, rot: rot, alive: true, weapon: wp, shield: shield, shieldLife: shieldLife};
+        angle: rot, rot: rot, alive: true, weapon: wp, shield: shield, shieldLife: shieldLife,
+        vx: vx, vy: vy};
       out.alive++;
     }
     // roles: authoritative static mapping from game input managers (every poll)

@@ -1,0 +1,17 @@
+纯原语黑盒测试（AI 自己写火控）+ 原语 v2/v3 修复
+
+背景：用户指出此前黑盒测试把成熟火控封装一并交给子智能体，测的是"封装好不好用"，
+而不是"原语是否足够让 AI 自己写火控"。本轮临时剥离所有选角/扫角/对点/提前量/转向/寻路封装，
+只给原语，子智能体自写火控。
+
+- 新增 docs/26-纯原语黑盒测试-2026-10-25.md（两轮 v1/v2 原语的方法与结果）
+- 新增 scripts/prim_audit.py：复跑子智能体 AI 并审计 set_input pid/开火/延迟/比分增量
+- 新增 scripts/prim_conformance.py：原语一致性验收
+- monitor_server STATE_JS 增强：phase(gc.getState)/roundId/t_ms/countdown/坦克 vx,vy
+
+轮1（v1 原语）：子智能体自写弹道仿真（OBB/墙厚/炮口），60s 5发5中、0自伤、0误控；审计 4/4
+轮2（v2 原语）：5发5中、0自伤；审计 fires=5 viol=0；挖出新缺口（零宽射线半径、from_xy、致命段等）
+原语 v3：simulate_shot(radius)/from_xy/ignore_tanks/first_bounce_index/deadly_from_index/
+         weapon_info/point_blocked/walls_unique/round_age_ms；一致性测试 PASS
+
+测试证据在仓库外 D:\AI Agent\tt_bb_lowlevel{,2,3}（黑盒目录，不入库）
