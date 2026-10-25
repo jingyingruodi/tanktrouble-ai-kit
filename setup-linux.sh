@@ -38,6 +38,14 @@ fi
 echo "[3/4] 创建运行时目录（data/、scripts/scratch/；均为 .gitignore 排除）"
 mkdir -p data scripts/scratch
 
+OLD_PROFILE="$HOME/.cache/tt-cdp"
+NEW_PROFILE="${XDG_DATA_HOME:-$HOME/.local/share}/tt-cdp"
+if [ -d "$OLD_PROFILE" ] && [ ! -d "$NEW_PROFILE" ]; then
+  echo "[提示] 检测到旧 profile 目录: $OLD_PROFILE"
+  echo "       新版默认使用 $NEW_PROFILE；如需保留登录态："
+  echo "         mv \"$OLD_PROFILE\" \"$NEW_PROFILE\""
+fi
+
 echo "[4/4] 浏览器探测"
 CHECK_RC=0
 ./.venv/bin/python launch_cdp.py --check || CHECK_RC=$?
@@ -60,7 +68,7 @@ cat <<'EOF'
 
 环境变量（可选）：
   TT_BROWSER=/usr/bin/chromium            # 指定浏览器（flatpak 亦可）
-  TT_CDP_PROFILE_BASE=~/.cache/tt-cdp     # 指定 profile 目录
+  TT_CDP_PROFILE_BASE=~/.local/share/tt-cdp   # 指定 profile 目录（默认）
   TT_CDP_PORT=9222                        # 固定 CDP 端口（auto 时也优先使用）
   TT_CHROME_NO_SANDBOX=1                  # 强制 --no-sandbox（root 运行时需要）
 EOF

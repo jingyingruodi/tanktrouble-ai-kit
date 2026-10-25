@@ -12,15 +12,16 @@
 
 解决三件平台相关的事：
   1. **浏览器探测**：Edge / Chrome / Chromium 的可执行文件路径（可用 ``TT_BROWSER`` 覆盖）；
-  2. **profile 目录**：Windows 用 ``%LOCALAPPDATA%\\tt-cdp``、macOS 用 ``~/Library/Caches/tt-cdp``、
-     Linux 用 ``$XDG_CACHE_HOME/tt-cdp``（默认 ``~/.cache/tt-cdp``）；可用
+  2. **profile 目录**：Windows 用 ``%LOCALAPPDATA%\\tt-cdp``、macOS 用 ``~/Library/Application Support/tt-cdp``、
+     Linux 用 ``$XDG_DATA_HOME/tt-cdp``（默认 ``~/.local/share/tt-cdp``）；可用
      ``TT_CDP_PROFILE_BASE`` 覆盖；
   3. **Python 进程列表 / 终止**：Windows 用 PowerShell(CIM)+taskkill，POSIX 用 ``ps``+信号。
 
 Linux 额外：
   * 以 root 运行 Chromium 需要 ``--no-sandbox``（本模块自动判断 ``os.geteuid()==0``，
     也可用 ``TT_CHROME_NO_SANDBOX=1`` 强制开启）；
-  * 无显示器的服务器请用 Xvfb：``xvfb-run -s "-screen 0 1280x800x24" python launch_cdp.py 9222``。
+  * 无显示器的服务器请用【常驻 Xvfb】：``Xvfb :99 -screen 0 1280x800x24 & export DISPLAY=:99``，
+    再 ``python launch_cdp.py 9222``（或 ``--hold``）。
 """
 import json
 import ntpath
@@ -349,56 +350,6 @@ def terminate(pid, grace=3.0):
             return True
         return True
     except ProcessLookupError:
-        return True
-    except Exception:
-        return False
-
-
-def script_token_match(argv, names):
-    """判断进程是否**在脚本位置**运行了 names 中的某个脚本（避免子串/参数误杀）。
-
-    只检查：
-      * argv[0] 的 basename（直接执行脚本，如 `./monitor_server.py`）；
-      * 解释器之后**第一个非选项 token**（即 `python <script> ...` 的 <script>）；
-        `-c` / `-m` 视为"无脚本文件位置"，不再往后匹配参数。
-    """
-    if not argv:
-        return False
-    names = set(names)
-    if os.path.basename(argv[0]) in names:
-        return True
-    skip_next = False
-    for tok in argv[1:]:
-        if skip_next:
-            skip_next = False
-            continue
-        if tok in ('-c', '-m'):
-            return False
-        if tok in ('-X', '-W', '-Q'):      # 带值选项，如 python -X dev script.py
-            skip_next = True
-            continue
-        if tok.startswith('-'):
-            continue
-        return os.path.basename(tok) in names
-    return False
-
-
-def terminate(pid, grace=3.0):
-    """终止进程：Windows 用 taskkill /F；POSIX 先 SIGTERM 再 SIGKILL。返回是否成功。"""
-    try:
-        if WIN:
-            subprocess.run(['taskkill', '/pid', str(pid), '/f'],
-                           capture_output=True, timeout=10)
-            return True
-        os.kill(int(pid), signal.SIGTERM)
-        t0 = time.time()
-        while time.time() - t0 < float(grace):
-            try:
-                os.kill(int(pid), 0)
-            except OSError:
-                return True
-            time.sleep(0.1)
-        os.kill(int(pid), signal.SIGKILL)
         return True
     except Exception:
         return False

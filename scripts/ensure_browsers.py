@@ -65,10 +65,11 @@ def main():
         return 0
 
     wait = float(os.environ.get('TT_LAUNCH_WAIT', '25'))
-    alive, ok, bad = [], [], []
+    alive, ok, bad, invalid = [], [], [], []
     for a in args:
         if not str(a).isdigit() or not (1 <= int(a) <= 65535):
-            print('[ensure] 非法端口参数: %r（忽略）' % a, flush=True)
+            print('[ensure] 非法端口参数: %r' % a, flush=True)
+            invalid.append(a)
             continue
         port = int(a)
         if probe(port):
@@ -87,6 +88,9 @@ def main():
         if not probe(p):
             ok.remove(p)
             bad.append(p)
+    if invalid and not (alive or ok):
+        print('[ensure] ❌ 没有任何有效端口（非法参数: %s）' % invalid, flush=True)
+        return 2
     print('[ensure] 原本在线: %s' % (alive or '无'), flush=True)
     print('[ensure] 新启动就绪: %s' % (ok or '无'), flush=True)
     if bad:

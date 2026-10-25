@@ -91,6 +91,7 @@ async def main():
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
+        sys.exit(asyncio.run(main()))
     except KeyboardInterrupt:
         print('\n[record-only] stopped')
+        sys.exit(130)

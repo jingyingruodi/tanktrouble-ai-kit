@@ -182,7 +182,19 @@ def main():
         check('discover(auto) 无环境变量也能解析端口', d2.get('port') is not None,
               'port=%s source=%s' % (d2.get('port'), d2.get('source')))
 
+    print('[10] 模块无重复定义')
+    import ast as _ast
+    pu_src = open(os.path.join(ROOT, 'cdp_tools', 'platform_utils.py'),
+                  encoding='utf-8').read()
+    _tree = _ast.parse(pu_src)
+    _fns = [n.name for n in _tree.body if isinstance(n, _ast.FunctionDef)]
+    _dups = sorted({n for n in _fns if _fns.count(n) > 1})
+    check('platform_utils 无重复 def', not _dups,
+          (', '.join(_dups) if _dups else '%d 个函数' % len(_fns)))
+
     bad = [r for r in results if not r[1]]
+    if skipped:
+        print('  跳过项: %s' % ', '.join(skipped), flush=True)
     print('\n结论: %s（%d 项检查，失败 %d，跳过 %d）'
           % ('✅ PASS' if not bad else '❌ FAIL', len(results), len(bad), len(skipped)),
           flush=True)

@@ -86,16 +86,18 @@ bat 快捷入口使用 `%~dp0` 相对路径，可移植。
 跨平台适配（Windows / macOS / Linux）：浏览器自动探测、profile 目录按平台取
 （Linux `~/.local/share/tt-cdp`）、进程清理跨平台、`TT_BROWSER` / `TT_CDP_PORT` /
 `TT_CDP_PROFILE_BASE` / `TT_CHROME_NO_SANDBOX` 环境变量。
-经过 **两轮 Linux 实机复检**：[docs/21](docs/21-Linux适配审查-2026-10-25.md) 的 9 条 MAJOR
-与 [docs/22](docs/22-Linux适配审查-复检2-2026-10-25.md) 指出的 M4/M6 已修复；
-Linux 干净副本「setup → Xvfb → 监控→录制→回放」e2e 已实测 PASS（docs/22 §1）。
+经过 **三轮 Linux 实机复检**（[docs/21](docs/21-Linux适配审查-2026-10-25.md)、
+[docs/22](docs/22-Linux适配审查-复检2-2026-10-25.md)、
+[docs/23](docs/23-Linux适配审查-复检3-2026-10-25.md)）：M4 自检已闭环（24 项 PASS），
+M6 launcher 判定、`terminate` 重复定义、`record_only` 退出码等已修复；
+Linux 干净副本「setup → Xvfb → 监控→录制→回放」e2e 连续两轮实测 PASS。
 
 ```bash
 chmod +x setup-linux.sh launch-browser.sh start-monitor.sh kill-monitor.sh
 ./setup-linux.sh                    # 依赖 + 浏览器探测
 ./launch-browser.sh 9222            # 带 CDP 启动并打开游戏
 ./start-monitor.sh                  # 监控室
-python3 scripts/selftest_platform.py   # 跨平台自检（约 23 项，期望 PASS）
+python3 scripts/selftest_platform.py   # 跨平台自检（约 24–25 项，期望 PASS）
 python3 scripts/selftest_monitor.py    # 监控/录制/回放自检（需游戏在局中）
 ```
 

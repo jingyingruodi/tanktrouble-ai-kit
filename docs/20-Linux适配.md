@@ -2,12 +2,13 @@
 
 > 本页说明如何在 Linux 上运行本项目。
 >
-> **验证状态（2026-10-25，两轮复检）**：
+> **验证状态（2026-10-25，三轮 Linux 实机复检）**：
 > - [docs/21](21-Linux适配审查-2026-10-25.md)（@68db7b0）：1 BLOCKER / 9 MAJOR；
-> - [docs/22](22-Linux适配审查-复检2-2026-10-25.md)（@a9e5ac0）：**6 PASS / 1 PARTIAL / 2 FAIL**
->   —— 其中 **M4（自检误报）、M6（launcher 假成功）在本轮已二次修复**（见 §11 与提交记录），
->   其余 MINOR 已处理；**Linux 实机最终复跑仍以你机器上的 §7 输出为准**。
-> - docs/22 同时确认：Linux 干净副本「一键 setup → Xvfb → 监控→录制→回放」e2e 首次 PASS。
+> - [docs/22](22-Linux适配审查-复检2-2026-10-25.md)（@a9e5ac0）：6 PASS / 1 PARTIAL / 2 FAIL；
+> - [docs/23](23-Linux适配审查-复检3-2026-10-25.md)（@369e8c9）：M4 闭环（24 项 PASS）、e2e 再次 PASS；
+>   剩余 M6-B（旧 CDP + 浏览器存活仍假成功）、N9（`terminate` 重复定义死代码）、N10（record_only rc）等
+>   **已在本轮修复**（§11），并用 docs/23 的复现用例回归验证。
+>   **Linux 实机最终复跑仍以你机器上的 §7 输出为准**。
 > - Windows 侧另有 8 个 `.bat` 实机记录（[03 §9](03-监控室与数据采集.md)）。
 > 桌面 X11 主链路（浏览器→CDP→监控→录制→回放）已在 Debian 实测可跑通；
 > **无显示器（Xvfb）路径请按 §4 的常驻 Xvfb 两步法**（不要直接 `xvfb-run` 包住 launcher）。
@@ -101,7 +102,7 @@ python3 scripts/verify_online_control_full.py auto --skip-move --shots 6
 | 变量 | 作用 |
 |---|---|
 | `TT_BROWSER` | 指定浏览器可执行文件（优先级最高；`--check` 会校验可执行性） |
-| `TT_CDP_PROFILE_BASE` | profile 根目录（默认 Linux `$XDG_DATA_HOME/tt-cdp`≈`~/.local/share/tt-cdp`、macOS `~/Library/Application Support/tt-cdp`、Windows `%LOCALAPPDATA%\tt-cdp`） |
+| `TT_CDP_PROFILE_BASE` | profile 根目录（默认 Linux `$XDG_DATA_HOME/tt-cdp`≈`~/.local/share/tt-cdp`、macOS `~/Library/Application Support/tt-cdp`、Windows `%LOCALAPPDATA%\tt-cdp`）。**从旧版升级**：旧 profile 在 `~/.cache/tt-cdp`，需 `mv ~/.cache/tt-cdp ~/.local/share/tt-cdp` 才保留登录态 |
 | `TT_CDP_PORT` | 固定 CDP 端口；**`auto` 发现时也优先使用**（已修 `M2`） |
 | `TT_CHROME_NO_SANDBOX=1` | 强制 `--no-sandbox`（root 运行 Chromium 需要；普通用户不建议） |
 | `EGO_BROWSER_STATE_DIR` | 使用 DSH/ego-browser 时指定其 state 目录（Linux 默认 `~/.local/state/ego-lite-linux`） |
@@ -123,7 +124,7 @@ python3 scripts/selftest_monitor.py      # 监控/录制/回放（需游戏在�
 [6] Linux root no-sandbox ... [7] 进程枚举与 kill 精确匹配 ...
 [8] ego state 目录（Linux 优先 XDG_STATE_HOME）...
 [9] auto 发现与 TT_CDP_PORT（真 discover 路径）...
-结论: ✅ PASS（约 23 项检查，失败 0）
+结论: ✅ PASS（约 24–25 项检查，失败 0；无 CDP 时 [9] 跳过，项数略少）
 ```
 
 > `[9]` 在有 CDP 时断言 `discover('auto')` 采用 `TT_CDP_PORT` 且 `source=explicit`；
@@ -147,7 +148,7 @@ python3 scripts/selftest_monitor.py      # 监控/录制/回放（需游戏在�
 ## 9. 与 Windows 的差异
 
 - 无 `%~dp0`/PowerShell 依赖：Linux 脚本用 `readlink -f "$0"` 解析自身目录；
-- profile 目录从 `%LOCALAPPDATA%` 改为 XDG cache（XDG 相对路径会被忽略）；
+- profile 目录从 `%LOCALAPPDATA%` 改为 `$XDG_DATA_HOME/tt-cdp`（默认 `~/.local/share/tt-cdp`；XDG 相对路径会被忽略）；
 - 进程管理从 CIM/taskkill 改为 `/proc` + SIGTERM/SIGKILL；
 - 浏览器候选从 Edge/Chrome 安装路径改为常见发行版路径 + `PATH` 查找 + flatpak 导出路径。
 
@@ -171,14 +172,15 @@ source .venv/bin/activate
 | M3 | `xvfb-run` 包 launcher → 浏览器随 Xvfb 死亡 | ✅ 文档改为常驻 Xvfb / `--hold` |
 | M4 | `selftest_platform` 误报 FAIL（复检2 发现 Linux 上恒 FAIL 1/21） | ✅ **二次修复**：`[4]` 改为注入 env 断言三平台；`[9]` 走真 `discover(auto)` 并断言 `source=explicit`；`[3]` 用 `_check_browser` |
 | M5 | 干净 clone 缺 `data/`、`scripts/scratch/` → 录制/自检必失败 | ✅ 已修（recorder 建父目录、自检建目录、setup 建目录） |
-| M6 | `launch_cdp` 假成功（复检2 发现"端口已有旧 CDP"仍会假成功） | ✅ **二次修复**：Popen 前记录端口指纹，就绪需「子进程活着 + CDP 归属本次实例」；失败分支 terminate 收尾 |
+| M6 | `launch_cdp` 假成功（复检2/复检3 发现"端口已有旧 CDP"仍会假成功） | ✅ **三次修复**：`owned` 标志 + 循环耗尽必失败；Popen 前记录端口指纹；同 profile 复用（新进程 exit 0 且旧实例仍健康）按成功处理；失败分支 terminate 收尾 |
 | M7 | `launch_cdp` 丢 URL（把 URL 当端口） | ✅ 已修（argparse；`about:blank` 可用） |
 | M8 | `kill_monitor` 按子串误杀非目标进程 | ✅ 已修（只匹配解释器后的脚本位置） |
 | M9 | 文档"已验证"措辞夸大 | ✅ 已按实机复检改写 |
 | m1 | `.sh` 未设置可执行位 | ✅ 已 `git update-index --chmod=+x` |
 | m2–m6 | sh 脚本失败分支/清理/Wayland/软链 | ✅ 已重写 4 个 `.sh`；本机用 **ShellCheck 0.10（`-s bash -S error`）验证语法通过**（Linux 实机未复测） |
 | m7–m20、n1–n4 | 其余 MINOR/NIT（可执行性校验、stdio、退出码、flatpak、`.venv` 忽略等） | ✅ 已处理；详见 docs/21 §3 |
-| N3–N11（docs/22） | `--hold` Ctrl+C 清理、端口范围校验、`read_browser_json` 类型守卫、`ensure_browsers` argparse/快速失败、`edge_multi` 入口健壮性、`terminate` 僵尸语义、缺依赖提示、profile 放 XDG data | ✅ 已处理 |
+| N3–N11（docs/22） | `--hold` Ctrl+C 清理、端口范围校验、`read_browser_json` 类型守卫、`ensure_browsers` argparse/快速失败、`edge_multi` 入口健壮性、缺依赖提示、profile 放 XDG data | ✅ 已处理 |
+| docs/23 追加 | M6-B 循环耗尽假成功；`terminate`/`script_token_match` 重复定义（旧版覆盖新版）；`record_only` 缺依赖 rc=0；`TT_FARM_PORT_BASE` 范围校验；`ensure_browsers` 全非法端口 rc=0；裸主机名 URL；profile 迁移提示；`[10]` 无重复 def 自检 | ✅ 已修复（本轮） |
 
 > 说明：以上修复已在本机（Windows）做编译 + 单测 + 回归（含 docs/22 给出的 M4/M6 复现用例）；
 > **Linux 实机最终复跑仍需按 §7 命令确认**，若结果与预期不符请把输出贴回仓库 issue。

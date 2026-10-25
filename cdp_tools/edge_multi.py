@@ -40,14 +40,23 @@ except ImportError:  # 脚本目录直接导入（python edge_multi.py）
 
 EDGE = find_browser()
 PROFILE_BASE = profile_base()
-def _env_int(name, default):
-    try:
-        return int(os.environ.get(name, default))
-    except (TypeError, ValueError):
+def _env_port(name, default):
+    """读取端口环境变量；非法/越界时回退默认值并告警。"""
+    raw = os.environ.get(name)
+    if raw is None:
         return default
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        print('[edge_multi] ⚠️ %s=%r 不是整数，使用默认 %d' % (name, raw, default))
+        return default
+    if not (1 <= val <= 65535):
+        print('[edge_multi] ⚠️ %s=%r 超出 1..65535，使用默认 %d' % (name, raw, default))
+        return default
+    return val
 
 
-PORT_BASE = _env_int('TT_FARM_PORT_BASE', 9222)
+PORT_BASE = _env_port('TT_FARM_PORT_BASE', 9222)
 
 class EdgeInstance:
     def __init__(self, index, port, profile_dir):
@@ -151,10 +160,20 @@ class EdgeFarm:
 
 if __name__ == '__main__':
     import sys
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 2
+    try:
+        n = int(sys.argv[1]) if len(sys.argv) > 1 else 2
+        if not (1 <= n <= 32):
+            raise ValueError('实例数需在 1..32: %r' % sys.argv[1])
+    except (TypeError, ValueError) as e:
+        print('[edge_multi] ❌ 参数错误: %s' % e)
+        sys.exit(2)
     farm = EdgeFarm(count=n)
     try:
-        farm.launch_all()
+        try:
+            farm.launch_all()
+        except RuntimeError as e:
+            print('[edge_multi] ❌ %s' % e)
+            sys.exit(1)
         print(f'[{n}] instances running. Ports: {[i.port for i in farm.instances]}')
     finally:
         # 想保持常驻就注释掉下面几行；非交互/关闭 stdin 时也不会泄漏浏览器

@@ -144,8 +144,12 @@ def parse_args(argv):
             if ns.url:
                 ap.error('端口无效且给出了两个 URL: %r %r' % (ns.port, ns.url))
             if ':' not in ns.port and '/' not in ns.port:
-                ap.error('第一个参数既不是端口也不是 URL: %r' % ns.port)
-            url = ns.port
+                if '.' in ns.port and ' ' not in ns.port:
+                    url = 'https://' + ns.port        # 裸主机名，如 example.com
+                else:
+                    ap.error('第一个参数既不是端口也不是 URL: %r' % ns.port)
+            else:
+                url = ns.port
     elif ns.url:
         url = ns.url
     if not (1 <= int(port) <= 65535):
@@ -210,22 +214,33 @@ def main():
 
     # 等待 CDP 就绪：必须"子进程活着"且"端口上的 CDP 是本次实例的"
     info = None
-    for _ in range(120):
+    owned = False
+    tries = int(os.environ.get('TT_LAUNCH_READY_TRIES', '120') or 120)
+    for _ in range(tries):
         if proc.poll() is not None:
+            # 情况 1：同 profile 已有实例 → 新进程移交参数后 exit 0，旧实例仍健康
+            if proc.returncode == 0 and pre_ws:
+                cur = probe_version(port, timeout=0.8)
+                if cur and cur.get('webSocketDebuggerUrl') == pre_ws:
+                    print('[launch] ℹ️ 端口 :%d 已有健康实例（%s），本次启动已移交参数'
+                          '——复用现有实例' % (port, cur.get('Browser', '?')), flush=True)
+                    return 0
             return _fail('浏览器提前退出（exit code=%s）' % proc.returncode)
         info = probe_version(port, timeout=0.8)
         if info:
             ws = info.get('webSocketDebuggerUrl')
             if pre_ws and ws == pre_ws:
-                # 端口仍被旧实例占着：给新实例一点时间；若它绑定失败会自行退出
+                # 端口仍被旧实例占着：不算成就，继续等新实例接管
+                info = None
                 time.sleep(0.25)
                 continue
+            owned = True
             break
         info = None
         time.sleep(0.25)
-    if not info:
-        return _fail('CDP 在 %d 上未就绪/未由本次实例接管（浏览器仍在运行: %s）'
-                     % (port, proc.poll() is None))
+    if not (info and owned):
+        return _fail('端口 %d 仍被旧 CDP 占用（等待约 %.0fs 后本次实例仍未接管）'
+                     % (port, tries * 0.25))
     print('[launch] ✅ CDP ready on :%d (%s)' % (port, info.get('Browser', '?')),
           flush=True)
 
