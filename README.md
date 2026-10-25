@@ -86,11 +86,9 @@ bat 快捷入口使用 `%~dp0` 相对路径，可移植。
 跨平台适配（Windows / macOS / Linux）：浏览器自动探测、profile 目录按平台取
 （Linux `~/.local/share/tt-cdp`）、进程清理跨平台、`TT_BROWSER` / `TT_CDP_PORT` /
 `TT_CDP_PROFILE_BASE` / `TT_CHROME_NO_SANDBOX` 环境变量。
-经过 **三轮 Linux 实机复检**（[docs/21](docs/21-Linux适配审查-2026-10-25.md)、
-[docs/22](docs/22-Linux适配审查-复检2-2026-10-25.md)、
-[docs/23](docs/23-Linux适配审查-复检3-2026-10-25.md)）：M4 自检已闭环（24 项 PASS），
-M6 launcher 判定、`terminate` 重复定义、`record_only` 退出码等已修复；
-Linux 干净副本「setup → Xvfb → 监控→录制→回放」e2e 连续两轮实测 PASS。
+经过 **四轮 Linux 实机复检**（[docs/21](docs/21-Linux适配审查-2026-10-25.md) →
+[docs/24](docs/24-Linux适配审查-复检4-2026-10-25.md)）：最终 **12/12 PASS、0 BLOCKER / 0 MAJOR**，
+Linux 适配已关闭；干净副本「setup → Xvfb → 监控→录制→回放」e2e 连续三轮实测 PASS。
 
 ```bash
 chmod +x setup-linux.sh launch-browser.sh start-monitor.sh kill-monitor.sh

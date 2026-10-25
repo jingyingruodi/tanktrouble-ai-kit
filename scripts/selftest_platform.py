@@ -107,15 +107,23 @@ def main():
                 os.environ[k] = v
 
     print('[5] 浏览器覆盖与可执行性校验')
+    old_tb = os.environ.get('TT_BROWSER')
     os.environ['TT_BROWSER'] = '/tmp/fake-browser'
-    check('TT_BROWSER 覆盖', pu.find_browser() == '/tmp/fake-browser', pu.find_browser())
     try:
-        import launch_cdp
-        err = launch_cdp._check_browser('/tmp/fake-browser')
-        check('launch_cdp._check_browser(不存在路径) 报错', err is not None, str(err)[:60])
-    except Exception as e:
-        print('  ⚠️  导入 launch_cdp 失败: %s: %s' % (type(e).__name__, e), flush=True)
-    del os.environ['TT_BROWSER']
+        check('TT_BROWSER 覆盖', pu.find_browser() == '/tmp/fake-browser',
+              pu.find_browser())
+        try:
+            import launch_cdp
+            err = launch_cdp._check_browser('/tmp/fake-browser')
+            check('launch_cdp._check_browser(不存在路径) 报错', err is not None,
+                  str(err)[:60])
+        except Exception as e:
+            print('  ⚠️  导入 launch_cdp 失败: %s: %s' % (type(e).__name__, e), flush=True)
+    finally:
+        if old_tb is None:
+            os.environ.pop('TT_BROWSER', None)
+        else:
+            os.environ['TT_BROWSER'] = old_tb
 
     print('[6] Linux root no-sandbox')
     os.environ['TT_CHROME_NO_SANDBOX'] = '1'
@@ -181,6 +189,11 @@ def main():
         d2 = eb.discover(preferred='auto')
         check('discover(auto) 无环境变量也能解析端口', d2.get('port') is not None,
               'port=%s source=%s' % (d2.get('port'), d2.get('source')))
+
+    env_browser = os.environ.get('TT_BROWSER')
+    if env_browser and not os.path.exists(env_browser):
+        print('  ⚠️  注意：TT_BROWSER=%r 不存在；[3] 只是错误分支自检，'
+              '不代表环境就绪（请跑 launch_cdp.py --check）' % env_browser, flush=True)
 
     print('[10] 模块无重复定义')
     import ast as _ast

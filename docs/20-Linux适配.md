@@ -2,12 +2,14 @@
 
 > 本页说明如何在 Linux 上运行本项目。
 >
-> **验证状态（2026-10-25，三轮 Linux 实机复检）**：
+> **验证状态（2026-10-25，四轮 Linux 实机复检 · 已关闭）**：
 > - [docs/21](21-Linux适配审查-2026-10-25.md)（@68db7b0）：1 BLOCKER / 9 MAJOR；
 > - [docs/22](22-Linux适配审查-复检2-2026-10-25.md)（@a9e5ac0）：6 PASS / 1 PARTIAL / 2 FAIL；
 > - [docs/23](23-Linux适配审查-复检3-2026-10-25.md)（@369e8c9）：M4 闭环（24 项 PASS）、e2e 再次 PASS；
 >   剩余 M6-B（旧 CDP + 浏览器存活仍假成功）、N9（`terminate` 重复定义死代码）、N10（record_only rc）等
 >   **已在本轮修复**（§11），并用 docs/23 的复现用例回归验证。
+>   - [docs/24](24-Linux适配审查-复检4-2026-10-25.md)（@7e83d6b）：**12/12 PASS，e2e 连续第三轮 PASS，
+>     0 BLOCKER / 0 MAJOR**，仅 4 个 NIT，**Linux 适配已关闭**。
 >   **Linux 实机最终复跑仍以你机器上的 §7 输出为准**。
 > - Windows 侧另有 8 个 `.bat` 实机记录（[03 §9](03-监控室与数据采集.md)）。
 > 桌面 X11 主链路（浏览器→CDP→监控→录制→回放）已在 Debian 实测可跑通；
@@ -107,6 +109,7 @@ python3 scripts/verify_online_control_full.py auto --skip-move --shots 6
 | `TT_CHROME_NO_SANDBOX=1` | 强制 `--no-sandbox`（root 运行 Chromium 需要；普通用户不建议） |
 | `EGO_BROWSER_STATE_DIR` | 使用 DSH/ego-browser 时指定其 state 目录（Linux 默认 `~/.local/state/ego-lite-linux`） |
 | `TT_FARM_PORT_BASE` | `edge_multi` 多实例起始端口（默认 9222） |
+| `TT_LAUNCH_READY_TRIES` | `launch_cdp` 就绪轮询次数（默认 120；端口已有旧 CDP 时 40；测试/CI 可调） |
 
 ## 7. 自检（Linux 实机请逐项跑）
 
@@ -129,6 +132,18 @@ python3 scripts/selftest_monitor.py      # 监控/录制/回放（需游戏在�
 
 > `[9]` 在有 CDP 时断言 `discover('auto')` 采用 `TT_CDP_PORT` 且 `source=explicit`；
 > 没有 CDP 时该项跳过（项数相应减少）。
+
+### 7.1 回归基线（docs/24 §4 建议，按序执行）
+
+```bash
+cp -a . /tmp/e2e && cd /tmp/e2e && rm -rf .venv data scripts/scratch
+bash setup-linux.sh                                     # 期望 rc=0
+Xvfb :92 -screen 0 1280x800x24 & export DISPLAY=:92     # 无显示器时
+./launch-browser.sh 9701 about:blank                    # 期望 CDP ready、rc=0
+. .venv/bin/activate
+python3 scripts/selftest_platform.py                    # 期望 24–25 项 PASS、rc=0
+TT_CDP_PORT=9701 python3 scripts/selftest_monitor.py    # 需游戏在局中，期望 PASS
+```
 
 ## 8. 已知限制 / 排障
 
@@ -180,7 +195,8 @@ source .venv/bin/activate
 | m2–m6 | sh 脚本失败分支/清理/Wayland/软链 | ✅ 已重写 4 个 `.sh`；本机用 **ShellCheck 0.10（`-s bash -S error`）验证语法通过**（Linux 实机未复测） |
 | m7–m20、n1–n4 | 其余 MINOR/NIT（可执行性校验、stdio、退出码、flatpak、`.venv` 忽略等） | ✅ 已处理；详见 docs/21 §3 |
 | N3–N11（docs/22） | `--hold` Ctrl+C 清理、端口范围校验、`read_browser_json` 类型守卫、`ensure_browsers` argparse/快速失败、`edge_multi` 入口健壮性、缺依赖提示、profile 放 XDG data | ✅ 已处理 |
-| docs/23 追加 | M6-B 循环耗尽假成功；`terminate`/`script_token_match` 重复定义（旧版覆盖新版）；`record_only` 缺依赖 rc=0；`TT_FARM_PORT_BASE` 范围校验；`ensure_browsers` 全非法端口 rc=0；裸主机名 URL；profile 迁移提示；`[10]` 无重复 def 自检 | ✅ 已修复（本轮） |
+| docs/23 追加 | M6-B 循环耗尽假成功；`terminate`/`script_token_match` 重复定义（旧版覆盖新版）；`record_only` 缺依赖 rc=0；`TT_FARM_PORT_BASE` 范围校验；`ensure_browsers` 全非法端口 rc=0；裸主机名 URL；profile 迁移提示；`[10]` 无重复 def 自检 | ✅ 已修复 |
+| docs/24（NIT） | `TT_LAUNCH_READY_TRIES` 未校验/未文档化；旧 CDP 场景默认等待 ~30s；`tries=0` 文案；`[3]` 错误分支自检提示 | ✅ 已处理（本轮） |
 
 > 说明：以上修复已在本机（Windows）做编译 + 单测 + 回归（含 docs/22 给出的 M4/M6 复现用例）；
 > **Linux 实机最终复跑仍需按 §7 命令确认**，若结果与预期不符请把输出贴回仓库 issue。

@@ -131,6 +131,8 @@ def parse_args(argv):
     ap.add_argument('--check', action='store_true', help='只检查环境，不启动浏览器')
     ap.add_argument('--hold', action='store_true',
                     help='就绪后保持前台直到浏览器退出（xvfb-run 场景必需）')
+    ap.epilog = ('环境变量：TT_LAUNCH_READY_TRIES=N 控制就绪轮询次数（默认 120；'
+                 '端口已有旧 CDP 时 40）')
     ns = ap.parse_args(argv)
 
     port = PORT_DEFAULT
@@ -189,6 +191,19 @@ def main():
     # Popen 前记录端口指纹：若端口上已有旧的 CDP，必须确认"新实例接管了它"
     pre = probe_version(port, timeout=0.5)
     pre_ws = (pre or {}).get('webSocketDebuggerUrl')
+
+    # 就绪等待次数（测试/CI 可调；在 Popen 前解析，避免异常时留下未管理的浏览器）
+    raw_tries = os.environ.get('TT_LAUNCH_READY_TRIES', '')
+    try:
+        tries = int(raw_tries) if raw_tries else 120
+    except ValueError:
+        print('[launch] ⚠️ TT_LAUNCH_READY_TRIES=%r 不是整数，使用默认 120'
+              % raw_tries, flush=True)
+        tries = 120
+    tries = max(1, min(tries, 1200))
+    if pre_ws and not raw_tries:
+        # 端口已有旧 CDP：新实例多半绑不上，默认等待缩短到 ~10s（120 次太久）
+        tries = 40
     if pre:
         print('[launch] ⚠️ 端口 :%d 已有 CDP 在监听（%s）；将校验是否由本次实例接管'
               % (port, pre.get('Browser', '?')), flush=True)
@@ -215,7 +230,6 @@ def main():
     # 等待 CDP 就绪：必须"子进程活着"且"端口上的 CDP 是本次实例的"
     info = None
     owned = False
-    tries = int(os.environ.get('TT_LAUNCH_READY_TRIES', '120') or 120)
     for _ in range(tries):
         if proc.poll() is not None:
             # 情况 1：同 profile 已有实例 → 新进程移交参数后 exit 0，旧实例仍健康
@@ -239,7 +253,10 @@ def main():
         info = None
         time.sleep(0.25)
     if not (info and owned):
-        return _fail('端口 %d 仍被旧 CDP 占用（等待约 %.0fs 后本次实例仍未接管）'
+        if pre_ws:
+            return _fail('端口 %d 仍被旧 CDP 占用（等待约 %.0fs 后本次实例仍未接管）'
+                         % (port, tries * 0.25))
+        return _fail('CDP 在 %d 上未就绪（等待约 %.0fs 后浏览器仍未提供调试端点）'
                      % (port, tries * 0.25))
     print('[launch] ✅ CDP ready on :%d (%s)' % (port, info.get('Browser', '?')),
           flush=True)
