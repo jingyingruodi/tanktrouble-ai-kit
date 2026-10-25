@@ -32,7 +32,7 @@ import os
 import sys
 import time
 
-BB = os.environ.get('TT_BB_DIR') or r'D:\AI Agent\tt_bb_lowlevel4'
+BB = os.environ.get('TT_BB_DIR') or r'D:\AI Agent\tt_bb_lowlevel5'
 if BB not in sys.path:
     sys.path.insert(0, BB)
 
@@ -172,6 +172,32 @@ async def main():
         print('  input_state 别名: forward=%r fwd=%r' % (inp_alias.get('forward'),
                                                           inp_alias.get('fwd')))
         ok &= inp_alias.get('forward') == inp_alias.get('fwd')
+
+        print('== 12) v5 原语（第四轮报告修复）==')
+        sim60 = p.simulate_shot(me, 90.0, st, max_bounces=16, max_length=60,
+                                ignore_self=True)
+        print('  max_length=60: traveled=%.1f applied=%.1f reason=%s'
+              % (sim60.get('traveled', -1), sim60.get('max_length_applied', -1),
+                 sim60.get('truncation_reason')))
+        ok &= (sim60.get('traveled') or 0) <= 60.5
+        ok &= sim60.get('max_length_applied') == 60
+        pose = p.simulate_shot(me, 0.0, st, from_pose=(t['x'], t['y'], t.get('rot') or 0.0),
+                               ignore_self=True)
+        exp_x = t['x'] + 2.5
+        print('  from_pose origin=(%.1f,%.1f) 期望 x≈%.1f' % (pose['origin']['x'],
+                                                              pose['origin']['y'], exp_x))
+        ok &= abs(pose['origin']['x'] - exp_x) < 0.3
+        ok &= 'origin_blocked_point' in sim60 and 'angle' in sim60
+        ok &= isinstance(st.get('round_seen_age_ms'), (int, float))
+        wi2 = await p.weapon_info(me)
+        print('  weapon_info: capacity=%r fired=%r ammo_left=%r'
+              % (wi2.get('ammo_capacity'), wi2.get('bullets_fired'), wi2.get('ammo_left')))
+        ok &= ('ammo_capacity' in wi2) and wi2.get('ammo_left') is None
+        import math as _m
+        bsim = p.simulate_shots(me, [0, 90], st,
+                                from_rots=[0.0, _m.radians(90)], ignore_self=True)
+        print('  simulate_shots from_rots: n=%d' % len(bsim))
+        ok &= len(bsim) == 2
 
         print('\n结论:', '✅ PASS' if ok else '❌ FAIL')
         return 0 if ok else 1

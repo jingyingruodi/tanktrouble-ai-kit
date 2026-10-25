@@ -1,16 +1,17 @@
-纯原语黑盒测试第三轮（v3 原语）+ v4 修复
+纯原语黑盒测试第四轮（v4）+ 原语 v5 修复
 
-轮 3（tt_bb_lowlevel3，v3 原语）：子智能体 60s 5 发 5 中、0 自伤、0 误控；
-其中 3 发为 1 次反弹解，实弹轨迹对 simulate_shot 预测折线最大偏差 0.000m，
-证实"带半径仿真"让安全反弹火控可行。Lead 审计 fires=5 viol=0。
+轮 4（tt_bb_lowlevel4，v4 原语）：子智能体 60s 5 发 5 中、0 自伤、0 误控；
+5 发全部是 2/3/4/5/3 次墙反弹解（52–78m），说明 v4 的 from_rot + max_bounces 修正
+让多反弹火控真正可用；Lead 审计 fires=5 viol=0 kills=5 opp_vict=0。
 
-轮 3 新报缺口 → v4 原语（tt_bb_lowlevel4）：
-- simulate_shot(from_rot=, ignore_self=True)（扫角时假设车体朝向）
-- max_bounces 语义修正（最多 N 次墙反弹，v3 有 off-by-one）
-- complete/truncated、muzzle_blocked/origin_blocked
-- ignore_tanks=True 布尔支持、tank_obb()、simulate_shots()、walls_unique(merge_collinear)
-- input_state 返回 forward/fwd、fireDown/fire；round_seen_age_ms
-- scripts/prim_conformance.py 扩到 11 组检查（默认 bb4），实机全 PASS
+轮 4 新报缺口 → v5（tt_bb_lowlevel5）：
+- simulate_shot(max_length) 改硬限制 + truncation_reason/max_length_applied/angle
+- from_pose=(x,y,rot) 假设车体位姿；from_xy 文档明确为起点
+- origin_blocked_point(r=0) 与 origin_blocked(按弹径) 分开
+- simulate_shots(from_rots=[...]) 支持每候选不同车体朝向
+- state() 直接带 round_seen_age_ms；weapon_info 修正弹药语义（ammo_capacity/bullets_fired）
+- README 增加"打偏自伤检查配方"（ignore_tanks=[foe] + N=16 + from_rot + hitTank==me）
+- prim_conformance.py 扩到 12 组检查（默认 bb5），实机全 PASS
 
-docs/26 补三轮横向对比、缺口收敛与 v4 证据；docs/README 更新条目。
-测试证据在仓库外 D:\AI Agent\tt_bb_lowlevel{,2,3,4}（黑盒目录，不入库）
+docs/26 补第四轮结果、v4 逐条评估与 v5 修复；docs/README 更新为 4 轮。
+测试证据在仓库外 D:\AI Agent\tt_bb_lowlevel{,2,3,4,5}（黑盒目录，不入库）
