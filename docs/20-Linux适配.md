@@ -2,10 +2,13 @@
 
 > 本页说明如何在 Linux 上运行本项目。
 >
-> **验证状态（2026-10-25）**：跨平台抽象与 Linux 分支已在 **Debian 13 + Chrome 156 + Python 3.13
-> 实机**复检（见 [21-Linux适配审查-2026-10-25.md](21-Linux适配审查-2026-10-25.md)）；
-> 审查提出的 9 条 MAJOR 已修复（`M1`–`M8`，见 §11），文档措辞已按实测修正（`M9`）。
-> Windows 侧另有 8 个 `.bat` 实机记录（[03 §9](03-监控室与数据采集.md)）。
+> **验证状态（2026-10-25，两轮复检）**：
+> - [docs/21](21-Linux适配审查-2026-10-25.md)（@68db7b0）：1 BLOCKER / 9 MAJOR；
+> - [docs/22](22-Linux适配审查-复检2-2026-10-25.md)（@a9e5ac0）：**6 PASS / 1 PARTIAL / 2 FAIL**
+>   —— 其中 **M4（自检误报）、M6（launcher 假成功）在本轮已二次修复**（见 §11 与提交记录），
+>   其余 MINOR 已处理；**Linux 实机最终复跑仍以你机器上的 §7 输出为准**。
+> - docs/22 同时确认：Linux 干净副本「一键 setup → Xvfb → 监控→录制→回放」e2e 首次 PASS。
+> - Windows 侧另有 8 个 `.bat` 实机记录（[03 §9](03-监控室与数据采集.md)）。
 > 桌面 X11 主链路（浏览器→CDP→监控→录制→回放）已在 Debian 实测可跑通；
 > **无显示器（Xvfb）路径请按 §4 的常驻 Xvfb 两步法**（不要直接 `xvfb-run` 包住 launcher）。
 
@@ -13,7 +16,7 @@
 
 | 模块 | 改动 |
 |---|---|
-| `cdp_tools/platform_utils.py` | 浏览器探测（Linux: google-chrome/chromium/microsoft-edge/brave/snap/flatpak…）、profile 目录、Python 进程枚举/终止（POSIX: `/proc` + 信号；Windows: CIM + taskkill） |
+| `cdp_tools/platform_utils.py` | 浏览器探测（Linux: google-chrome/chromium/microsoft-edge/brave/snap/flatpak…）、profile 目录（Linux `$XDG_DATA_HOME`、macOS `~/Library/Application Support`、Windows `%LOCALAPPDATA%`）、Python 进程枚举/终止（POSIX: `/proc` + 信号；Windows: CIM + taskkill） |
 | `launch_cdp.py` | 跨平台浏览器探测；`--check` 只检查不启动；`--hold`（Xvfb 必需）；Linux root 自动 `--no-sandbox`；进程存活校验 + IPv4/IPv6 探测；stdio 重定向 |
 | `cdp_tools/edge_multi.py` | 跨平台多实例；no-sandbox；`TT_FARM_PORT_BASE` |
 | `scripts/kill_monitor.py` | 跨平台；**按 argv 脚本位置精确匹配**（不会误杀命令行含关键词的编辑器/日志/包装 shell） |
@@ -98,7 +101,7 @@ python3 scripts/verify_online_control_full.py auto --skip-move --shots 6
 | 变量 | 作用 |
 |---|---|
 | `TT_BROWSER` | 指定浏览器可执行文件（优先级最高；`--check` 会校验可执行性） |
-| `TT_CDP_PROFILE_BASE` | profile 根目录（默认 Linux `$XDG_CACHE_HOME/tt-cdp`、macOS `~/Library/Caches/tt-cdp`、Windows `%LOCALAPPDATA%\tt-cdp`） |
+| `TT_CDP_PROFILE_BASE` | profile 根目录（默认 Linux `$XDG_DATA_HOME/tt-cdp`≈`~/.local/share/tt-cdp`、macOS `~/Library/Application Support/tt-cdp`、Windows `%LOCALAPPDATA%\tt-cdp`） |
 | `TT_CDP_PORT` | 固定 CDP 端口；**`auto` 发现时也优先使用**（已修 `M2`） |
 | `TT_CHROME_NO_SANDBOX=1` | 强制 `--no-sandbox`（root 运行 Chromium 需要；普通用户不建议） |
 | `EGO_BROWSER_STATE_DIR` | 使用 DSH/ego-browser 时指定其 state 目录（Linux 默认 `~/.local/state/ego-lite-linux`） |
@@ -112,16 +115,19 @@ python3 scripts/selftest_platform.py     # 平台分支/路径/进程/ego state/
 python3 scripts/selftest_monitor.py      # 监控/录制/回放（需游戏在局中）
 ```
 
-预期输出示例（当前代码在 Windows 实测）：
+预期输出（Linux 实机请以 docs/22 的复现方式为准）：
 
 ```
 [1] 平台识别 ... [2] 三平台浏览器候选 ... [3] 当前平台浏览器 ...
-[4] profile 目录 ... [5] 浏览器覆盖与可执行性校验 ... [6] Linux root no-sandbox ...
-[7] 进程枚举与 kill 精确匹配 ... [8] ego state 目录（Linux 优先 XDG_STATE_HOME）...
-[9] TT_CDP_PORT 生效 ... 结论: ✅ PASS（21 项检查，失败 0）
+[4] profile 目录（注入 env 断言三平台） ... [5] 浏览器覆盖与可执行性校验 ...
+[6] Linux root no-sandbox ... [7] 进程枚举与 kill 精确匹配 ...
+[8] ego state 目录（Linux 优先 XDG_STATE_HOME）...
+[9] auto 发现与 TT_CDP_PORT（真 discover 路径）...
+结论: ✅ PASS（约 23 项检查，失败 0）
 ```
 
-> 项数会随"当前有没有 CDP 在跑"略变（`[9]` 在无 CDP 时跳过）。
+> `[9]` 在有 CDP 时断言 `discover('auto')` 采用 `TT_CDP_PORT` 且 `source=explicit`；
+> 没有 CDP 时该项跳过（项数相应减少）。
 
 ## 8. 已知限制 / 排障
 
@@ -163,15 +169,16 @@ source .venv/bin/activate
 | M1 | ego state 目录取错（Linux 在 XDG **state**） | ✅ 已修（`state_dirs()` 优先 `XDG_STATE_HOME`） |
 | M2 | `TT_CDP_PORT` 在 `auto` 下被忽略 | ✅ 已修（`preferred in (None,'','auto')`） |
 | M3 | `xvfb-run` 包 launcher → 浏览器随 Xvfb 死亡 | ✅ 文档改为常驻 Xvfb / `--hold` |
-| M4 | `selftest_platform` 在有 CDP 时误报 FAIL | ✅ 已重写（21 项，`[9]` 按实际 CDP 断言/跳过） |
+| M4 | `selftest_platform` 误报 FAIL（复检2 发现 Linux 上恒 FAIL 1/21） | ✅ **二次修复**：`[4]` 改为注入 env 断言三平台；`[9]` 走真 `discover(auto)` 并断言 `source=explicit`；`[3]` 用 `_check_browser` |
 | M5 | 干净 clone 缺 `data/`、`scripts/scratch/` → 录制/自检必失败 | ✅ 已修（recorder 建父目录、自检建目录、setup 建目录） |
-| M6 | `launch_cdp` 假成功（端口已有旧 CDP/浏览器秒退仍报 ready） | ✅ 已修（`proc.poll()` 校验） |
+| M6 | `launch_cdp` 假成功（复检2 发现"端口已有旧 CDP"仍会假成功） | ✅ **二次修复**：Popen 前记录端口指纹，就绪需「子进程活着 + CDP 归属本次实例」；失败分支 terminate 收尾 |
 | M7 | `launch_cdp` 丢 URL（把 URL 当端口） | ✅ 已修（argparse；`about:blank` 可用） |
 | M8 | `kill_monitor` 按子串误杀非目标进程 | ✅ 已修（只匹配解释器后的脚本位置） |
 | M9 | 文档"已验证"措辞夸大 | ✅ 已按实机复检改写 |
 | m1 | `.sh` 未设置可执行位 | ✅ 已 `git update-index --chmod=+x` |
-| m2–m6 | sh 脚本失败分支/清理/Wayland/软链 | ✅ 已重写 4 个 `.sh`；并用 **ShellCheck 0.10（`-s bash -S error`）验证 4 个脚本语法通过** |
+| m2–m6 | sh 脚本失败分支/清理/Wayland/软链 | ✅ 已重写 4 个 `.sh`；本机用 **ShellCheck 0.10（`-s bash -S error`）验证语法通过**（Linux 实机未复测） |
 | m7–m20、n1–n4 | 其余 MINOR/NIT（可执行性校验、stdio、退出码、flatpak、`.venv` 忽略等） | ✅ 已处理；详见 docs/21 §3 |
+| N3–N11（docs/22） | `--hold` Ctrl+C 清理、端口范围校验、`read_browser_json` 类型守卫、`ensure_browsers` argparse/快速失败、`edge_multi` 入口健壮性、`terminate` 僵尸语义、缺依赖提示、profile 放 XDG data | ✅ 已处理 |
 
-> 说明：以上修复已在本机（Windows）做编译 + 单测 + 回归；**Linux 实机回归仍需按 §7 命令确认**，
-> 若结果与预期不符请把输出贴回仓库 issue。
+> 说明：以上修复已在本机（Windows）做编译 + 单测 + 回归（含 docs/22 给出的 M4/M6 复现用例）；
+> **Linux 实机最终复跑仍需按 §7 命令确认**，若结果与预期不符请把输出贴回仓库 issue。

@@ -143,9 +143,13 @@ def parse_args(argv):
             # 第一个位置参数不是数字 → 视为 URL（默认端口）
             if ns.url:
                 ap.error('端口无效且给出了两个 URL: %r %r' % (ns.port, ns.url))
+            if ':' not in ns.port and '/' not in ns.port:
+                ap.error('第一个参数既不是端口也不是 URL: %r' % ns.port)
             url = ns.port
     elif ns.url:
         url = ns.url
+    if not (1 <= int(port) <= 65535):
+        ap.error('端口超出范围 1..65535: %r' % port)
     return ns, port, url
 
 
@@ -178,27 +182,50 @@ def main():
     print('[launch] browser=%s' % browser, flush=True)
     print('[launch] CDP :%d profile=%s url=%s' % (port, profile_dir, url), flush=True)
 
+    # Popen 前记录端口指纹：若端口上已有旧的 CDP，必须确认"新实例接管了它"
+    pre = probe_version(port, timeout=0.5)
+    pre_ws = (pre or {}).get('webSocketDebuggerUrl')
+    if pre:
+        print('[launch] ⚠️ 端口 :%d 已有 CDP 在监听（%s）；将校验是否由本次实例接管'
+              % (port, pre.get('Browser', '?')), flush=True)
+
     popen_kw = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL,
                 'stderr': subprocess.DEVNULL}
     if not is_windows():
         popen_kw['start_new_session'] = True
     proc = subprocess.Popen([browser] + args, **popen_kw)
 
-    # 等待 CDP 就绪：同时检查子进程是否已退出（否则是"假成功"）
+    def _fail(msg):
+        print('[launch] ❌ %s' % msg, flush=True)
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    proc.kill()
+        except Exception:
+            pass
+        return 1
+
+    # 等待 CDP 就绪：必须"子进程活着"且"端口上的 CDP 是本次实例的"
     info = None
-    for _ in range(80):
+    for _ in range(120):
+        if proc.poll() is not None:
+            return _fail('浏览器提前退出（exit code=%s）' % proc.returncode)
         info = probe_version(port, timeout=0.8)
         if info:
+            ws = info.get('webSocketDebuggerUrl')
+            if pre_ws and ws == pre_ws:
+                # 端口仍被旧实例占着：给新实例一点时间；若它绑定失败会自行退出
+                time.sleep(0.25)
+                continue
             break
-        if proc.poll() is not None:
-            print('[launch] ❌ 浏览器提前退出（exit code=%s）' % proc.returncode,
-                  flush=True)
-            return 1
+        info = None
         time.sleep(0.25)
     if not info:
-        print('[launch] ❌ CDP 在 %d 上未就绪（浏览器仍在运行: %s）'
-              % (port, proc.poll() is None), flush=True)
-        return 1
+        return _fail('CDP 在 %d 上未就绪/未由本次实例接管（浏览器仍在运行: %s）'
+                     % (port, proc.poll() is None))
     print('[launch] ✅ CDP ready on :%d (%s)' % (port, info.get('Browser', '?')),
           flush=True)
 
@@ -208,10 +235,19 @@ def main():
         print('[launch] focused game window', flush=True)
 
     if opts.hold:
-        print('[launch] --hold：等待浏览器退出 …', flush=True)
+        print('[launch] --hold：等待浏览器退出 …（Ctrl+C 会同时关闭浏览器）', flush=True)
         try:
             return proc.wait()
         except KeyboardInterrupt:
+            print('[launch] 收到 Ctrl+C，关闭浏览器 …', flush=True)
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
             return 130
     return 0
 

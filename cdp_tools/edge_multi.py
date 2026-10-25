@@ -40,7 +40,14 @@ except ImportError:  # 脚本目录直接导入（python edge_multi.py）
 
 EDGE = find_browser()
 PROFILE_BASE = profile_base()
-PORT_BASE = int(os.environ.get('TT_FARM_PORT_BASE', '9222'))
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+PORT_BASE = _env_int('TT_FARM_PORT_BASE', 9222)
 
 class EdgeInstance:
     def __init__(self, index, port, profile_dir):
@@ -52,8 +59,9 @@ class EdgeInstance:
 
     def launch(self):
         """在该实例端口上启动带 CDP 的浏览器。"""
-        if not EDGE:
-            raise RuntimeError('未找到 Edge/Chrome/Chromium；请设置 TT_BROWSER')
+        if not EDGE or not os.path.isfile(EDGE):
+            raise RuntimeError('浏览器不可用（TT_BROWSER=%r）；请设置正确的可执行文件路径'
+                               % EDGE)
         os.makedirs(self.profile_dir, exist_ok=True)
         args = [
             f'--remote-debugging-port={self.port}',
@@ -64,7 +72,10 @@ class EdgeInstance:
             *no_sandbox_flags(),
             'about:blank',
         ]
-        self.proc = subprocess.Popen([EDGE] + args)
+        try:
+            self.proc = subprocess.Popen([EDGE] + args)
+        except OSError as e:
+            raise RuntimeError("启动浏览器失败: %s" % e)
         # 等待 CDP 端点就绪
         for _ in range(40):
             try:
@@ -146,9 +157,9 @@ if __name__ == '__main__':
         farm.launch_all()
         print(f'[{n}] instances running. Ports: {[i.port for i in farm.instances]}')
     finally:
-        # 想保持常驻就注释掉下面三行（非交互环境不会因 EOFError 泄漏浏览器）
+        # 想保持常驻就注释掉下面几行；非交互/关闭 stdin 时也不会泄漏浏览器
         try:
             input('Press Enter to close all instances...')
-        except EOFError:
+        except (EOFError, RuntimeError, OSError, KeyboardInterrupt):
             pass
         farm.close_all()

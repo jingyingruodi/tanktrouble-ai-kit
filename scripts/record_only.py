@@ -32,6 +32,12 @@ from recorder import Recorder, CompressedRecorder
 
 
 async def main():
+    try:
+        import websockets  # noqa: F401
+    except ImportError:
+        print('[record-only] ❌ 缺少 websockets：先运行 setup-linux.sh，'
+              '或 source .venv/bin/activate', flush=True)
+        return 2
     args = sys.argv[1:]
     # 支持 auto / TT_CDP_PORT：统一解析（见 cdp_tools/port_arg.py）
     _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cdp_tools')

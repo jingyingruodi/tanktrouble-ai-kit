@@ -23,7 +23,9 @@ Linux 额外：
   * 无显示器的服务器请用 Xvfb：``xvfb-run -s "-screen 0 1280x800x24" python launch_cdp.py 9222``。
 """
 import json
+import ntpath
 import os
+import posixpath
 import shutil
 import signal
 import subprocess
@@ -132,20 +134,33 @@ def find_browser(explicit=None, platform=None):
 
 # ────────────────────────────── profile 目录 ──────────────────────────────
 def profile_base(platform=None):
-    """CDP 浏览器 profile 根目录（可用 ``TT_CDP_PROFILE_BASE`` 覆盖）。"""
-    env = os.environ.get('TT_CDP_PROFILE_BASE')
-    if env:
-        return env
+    """CDP 浏览器 profile 根目录（可用 ``TT_CDP_PROFILE_BASE`` 覆盖）。
+
+    平台默认（profile 含登录态，放"数据"目录而非 cache）：
+      Windows  %LOCALAPPDATA%\\tt-cdp
+      macOS    ~/Library/Application Support/tt-cdp
+      Linux    $XDG_DATA_HOME/tt-cdp（默认 ~/.local/share/tt-cdp）
+    相对路径的 XDG 变量按规范忽略。
+    """
+    env = os.environ
+    override = env.get('TT_CDP_PROFILE_BASE')
+    if override:
+        return override
     p = platform or sys.platform
     if p.startswith('win'):
-        base = os.environ.get('LOCALAPPDATA') or os.path.expanduser(r'~\AppData\Local')
-        return os.path.join(base, 'tt-cdp')
+        base = env.get('LOCALAPPDATA')
+        if not base:
+            home = env.get('USERPROFILE') or env.get('HOME') or os.path.expanduser('~')
+            base = ntpath.join(home, 'AppData', 'Local')
+        return ntpath.join(base, 'tt-cdp')
     if p == 'darwin':
-        return os.path.join(os.path.expanduser('~/Library/Caches'), 'tt-cdp')
-    base = os.environ.get('XDG_CACHE_HOME') or ''
-    if not os.path.isabs(base):            # XDG 规范：相对路径应被忽略
-        base = os.path.expanduser('~/.cache')
-    return os.path.join(base, 'tt-cdp')
+        home = env.get('HOME') or os.path.expanduser('~')
+        return posixpath.join(home, 'Library', 'Application Support', 'tt-cdp')
+    base = env.get('XDG_DATA_HOME') or ''
+    if not posixpath.isabs(base):
+        home = env.get('HOME') or os.path.expanduser('~')
+        base = posixpath.join(home, '.local', 'share')
+    return posixpath.join(base, 'tt-cdp')
 
 
 def no_sandbox_flags(platform=None):
@@ -279,9 +294,89 @@ def script_token_match(argv, names):
     names = set(names)
     if os.path.basename(argv[0]) in names:
         return True
+    skip_next = False
     for tok in argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
         if tok in ('-c', '-m'):
             return False
+        if tok in ('-X', '-W', '-Q'):      # 带值选项，如 python -X dev script.py
+            skip_next = True
+            continue
+        if tok.startswith('-'):
+            continue
+        return os.path.basename(tok) in names
+    return False
+
+
+def _posix_zombie(pid):
+    """Linux/macOS：进程是否已是僵尸（Z）。"""
+    try:
+        with open('/proc/%d/stat' % pid, 'r', encoding='utf-8', errors='replace') as f:
+            parts = f.read().split()
+        return len(parts) > 2 and parts[2] == 'Z'
+    except Exception:
+        return False
+
+
+def terminate(pid, grace=3.0):
+    """终止进程：Windows 用 taskkill /F；POSIX 先 SIGTERM 再 SIGKILL。
+
+    等待期间若进程变僵尸/消失即视为成功，不再空转满 grace。
+    """
+    try:
+        if WIN:
+            r = subprocess.run(['taskkill', '/pid', str(pid), '/f'],
+                               capture_output=True, timeout=10)
+            return r.returncode == 0
+        pid = int(pid)
+        if _posix_zombie(pid):
+            return True
+        os.kill(pid, signal.SIGTERM)
+        t0 = time.time()
+        while time.time() - t0 < float(grace):
+            if _posix_zombie(pid):
+                return True
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return True
+            time.sleep(0.1)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            return True
+        return True
+    except ProcessLookupError:
+        return True
+    except Exception:
+        return False
+
+
+def script_token_match(argv, names):
+    """判断进程是否**在脚本位置**运行了 names 中的某个脚本（避免子串/参数误杀）。
+
+    只检查：
+      * argv[0] 的 basename（直接执行脚本，如 `./monitor_server.py`）；
+      * 解释器之后**第一个非选项 token**（即 `python <script> ...` 的 <script>）；
+        `-c` / `-m` 视为"无脚本文件位置"，不再往后匹配参数。
+    """
+    if not argv:
+        return False
+    names = set(names)
+    if os.path.basename(argv[0]) in names:
+        return True
+    skip_next = False
+    for tok in argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in ('-c', '-m'):
+            return False
+        if tok in ('-X', '-W', '-Q'):      # 带值选项，如 python -X dev script.py
+            skip_next = True
+            continue
         if tok.startswith('-'):
             continue
         return os.path.basename(tok) in names

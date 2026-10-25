@@ -78,22 +78,24 @@ python scripts/kill_monitor.py                      # 清理 monitor/playback �
 打开 `tanktrouble_monitor.html`（自动发现 9310–9317 实例）即可看到实时状态与回放；
 监控室页面与游戏页请放在**同一浏览器的不同标签页**（同标签页导航会让监控源失去游戏上下文）。
 bat 快捷入口使用 `%~dp0` 相对路径，可移植。
+> 命令里的 `python` 在 Windows 上可用；Linux/macOS 请用 `python3`（`.sh` 脚本已处理）。
 
 
 ## Linux 支持
 
 跨平台适配（Windows / macOS / Linux）：浏览器自动探测、profile 目录按平台取
-（Linux `~/.cache/tt-cdp`）、进程清理跨平台、`TT_BROWSER` / `TT_CDP_PORT` /
+（Linux `~/.local/share/tt-cdp`）、进程清理跨平台、`TT_BROWSER` / `TT_CDP_PORT` /
 `TT_CDP_PROFILE_BASE` / `TT_CHROME_NO_SANDBOX` 环境变量。
-Linux 分支已在 **Debian 13 实机复检**（[docs/21](docs/21-Linux适配审查-2026-10-25.md)），
-审查提出的 9 条 MAJOR 已修复（[docs/20 §11](docs/20-Linux适配.md)）。
+经过 **两轮 Linux 实机复检**：[docs/21](docs/21-Linux适配审查-2026-10-25.md) 的 9 条 MAJOR
+与 [docs/22](docs/22-Linux适配审查-复检2-2026-10-25.md) 指出的 M4/M6 已修复；
+Linux 干净副本「setup → Xvfb → 监控→录制→回放」e2e 已实测 PASS（docs/22 §1）。
 
 ```bash
 chmod +x setup-linux.sh launch-browser.sh start-monitor.sh kill-monitor.sh
 ./setup-linux.sh                    # 依赖 + 浏览器探测
 ./launch-browser.sh 9222            # 带 CDP 启动并打开游戏
 ./start-monitor.sh                  # 监控室
-python3 scripts/selftest_platform.py   # 跨平台自检（应 PASS）
+python3 scripts/selftest_platform.py   # 跨平台自检（约 23 项，期望 PASS）
 python3 scripts/selftest_monitor.py    # 监控/录制/回放自检（需游戏在局中）
 ```
 

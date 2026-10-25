@@ -100,6 +100,8 @@ def read_browser_json():
                 data = json.load(fh)
         except Exception:
             continue
+        if not isinstance(data, dict):
+            continue          # []/null/42 等坏文件不应中断 auto 解析
         if isinstance(data.get('port'), int) and data['port'] > 0:
             data['_state_dir'] = d
             return data

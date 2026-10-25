@@ -39,7 +39,11 @@ echo "[3/4] 创建运行时目录（data/、scripts/scratch/；均为 .gitignore
 mkdir -p data scripts/scratch
 
 echo "[4/4] 浏览器探测"
-./.venv/bin/python launch_cdp.py --check || true
+CHECK_RC=0
+./.venv/bin/python launch_cdp.py --check || CHECK_RC=$?
+if [ "$CHECK_RC" -ne 0 ]; then
+  echo "[警告] 浏览器探测失败（rc=$CHECK_RC）：请设置 TT_BROWSER=/path/to/chrome 后重跑 ./launch-browser.sh"
+fi
 
 cat <<'EOF'
 

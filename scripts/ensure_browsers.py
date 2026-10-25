@@ -48,13 +48,14 @@ def launch_one(port, url):
 
 
 def main():
-    args = [a for a in sys.argv[1:]]
-    url = 'about:blank'          # 默认空白页（本地测试；需在线页请显式 --url）
-    if '--url' in args:
-        i = args.index('--url')
-        if i + 1 < len(args):
-            url = args[i + 1]
-            del args[i:i + 2]
+    import argparse
+    ap = argparse.ArgumentParser(description='确保若干 CDP 浏览器实例已就绪')
+    ap.add_argument('ports', nargs='*', help='CDP 端口（默认取 TT_CDP_PORT 或 auto）')
+    ap.add_argument('--url', default='about:blank',
+                    help='新启动浏览器打开的 URL（默认 about:blank）')
+    ns = ap.parse_args(sys.argv[1:])
+
+    args = list(ns.ports)
     if not args:
         args = [os.environ.get('TT_CDP_PORT') or 'auto']
 
@@ -66,31 +67,32 @@ def main():
     wait = float(os.environ.get('TT_LAUNCH_WAIT', '25'))
     alive, ok, bad = [], [], []
     for a in args:
-        if not str(a).isdigit():
-            print('[ensure] 跳过非端口参数: %s' % a, flush=True)
+        if not str(a).isdigit() or not (1 <= int(a) <= 65535):
+            print('[ensure] 非法端口参数: %r（忽略）' % a, flush=True)
             continue
         port = int(a)
         if probe(port):
             alive.append(port)
             continue
-        rc = launch_one(port, url)
-        (ok if rc == 0 else bad).append(port)
+        rc = launch_one(port, ns.url)
+        if rc != 0:
+            print('[ensure] ❌ 启动 %d 失败（rc=%d）' % (port, rc), flush=True)
+            bad.append(port)
+            continue                    # 失败快速返回，不再空等
+        ok.append(port)
     t0 = time.time()
-    while time.time() - t0 < wait and any(not probe(p) for p in ok + bad):
+    while time.time() - t0 < wait and any(not probe(p) for p in ok):
         time.sleep(0.5)
-    for p in ok + bad:
+    for p in list(ok):
         if not probe(p):
-            if p not in bad:
-                bad.append(p)
-            if p in ok:
-                ok.remove(p)
+            ok.remove(p)
+            bad.append(p)
     print('[ensure] 原本在线: %s' % (alive or '无'), flush=True)
     print('[ensure] 新启动就绪: %s' % (ok or '无'), flush=True)
     if bad:
         print('[ensure] ❌ 启动失败/未就绪: %s' % bad, flush=True)
         return 1
     return 0
-
 
 if __name__ == '__main__':
     sys.exit(main())

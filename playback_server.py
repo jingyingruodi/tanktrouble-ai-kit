@@ -104,6 +104,12 @@ async def serve(frames, port, fps, loop):
 
 
 async def main():
+    try:
+        import websockets  # noqa: F401
+    except ImportError:
+        print('[playback] ❌ 缺少 websockets：先运行 setup-linux.sh，'
+              '或 source .venv/bin/activate', flush=True)
+        return 2
     args = sys.argv[1:]
     if not args:
         print(__doc__)
