@@ -117,6 +117,10 @@ STATE_JS = r"""
     out.raf_ts = window.__ttFrameTs;
   } catch(e) {}
   try { if (gc.getState) out.phase = gc.getState(); } catch(e){}
+  try { if (typeof Constants !== 'undefined' && Constants.getMode) out.mode = String(Constants.getMode()); } catch(e){}
+  try { const cl = (typeof ClientManager !== 'undefined' && ClientManager.getClient)
+        ? ClientManager.getClient() : null;
+        if (cl && cl.getCurrentGameId) out.gameId = cl.getCurrentGameId(); } catch(e){}
   try { if (gc.getRoundId) out.roundId = gc.getRoundId(); } catch(e){}
   try { if (gc.countDownValue !== undefined) { out.countdown_raw = gc.countDownValue;
     out.countdown = (gc.getState && gc.getState() === 'counting down') ? gc.countDownValue : null; } } catch(e){}
@@ -293,19 +297,69 @@ STATE_JS = r"""
     }
   } catch(e){}
 
-  // zones
+  // zones（毒圈/辐射雾）：v6.5 暴露完整字段
+  // 语义：storm = gc.getStorm()（本轮是否启用毒圈；online 常为 true，**不代表已出现**）
+  //       storm_active = 当前是否真的有 zone 对象（毒圈已出现）；safe 是世界米坐标安全区。
   try {
-    const zones = gc.getZones ? gc.getZones() : {};
-    for (const zid in zones) {
-      const z = zones[zid];
+    const zs = gc.getZones ? gc.getZones() : {};
+    out.storm_zone_count = 0;
+    for (const zid in zs) {
+      const z = zs[zid];
       const f = z.getFields ? z.getFields() : null;
-      if (f && f._tileBounds) {
-        const tb = f._tileBounds;
-        out.zones.push({minX:(tb.minX||0)+(f._expansionTilesLeft||0), maxX:(tb.maxX||0)-(f._expansionTilesRight||0),
-          minY:(tb.minY||0)+(f._expansionTilesTop||0), maxY:(tb.maxY||0)-(f._expansionTilesBottom||0)});
+      const rec = {id: zid};
+      try { rec.type = z.getType ? z.getType() : null; } catch(e) {}
+      try { rec.nTiles = z.getTiles ? z.getTiles().length : null; } catch(e) {}
+      if (f) {
+        const tb = f._tileBounds || null;
+        if (tb) {
+          const minX = (tb.minX||0) + (f._expansionTilesLeft||0);
+          const maxX = (tb.maxX||0) - (f._expansionTilesRight||0);
+          const minY = (tb.minY||0) + (f._expansionTilesTop||0);
+          const maxY = (tb.maxY||0) - (f._expansionTilesBottom||0);
+          // 兼容旧消费者：顶层仍是安全区 tile 索引矩形
+          rec.minX = minX; rec.maxX = maxX; rec.minY = minY; rec.maxY = maxY;
+          rec.tileBounds = {minX: tb.minX, minY: tb.minY, maxX: tb.maxX, maxY: tb.maxY};
+          rec.safeTile = {minX: minX, maxX: maxX, minY: minY, maxY: maxY};
+          rec.safe = {x0: minX*10, x1: (maxX+1)*10, y0: minY*10, y1: (maxY+1)*10};  // 世界米
+          rec.expansionTiles = {left: f._expansionTilesLeft||0, right: f._expansionTilesRight||0,
+                                top: f._expansionTilesTop||0, bottom: f._expansionTilesBottom||0};
+          rec.expansionSide = (f._expansionSide !== undefined) ? f._expansionSide : null;
+          rec.expansionTime = (f._expansionTime !== undefined) ? f._expansionTime : null;
+          rec.expansionSequence = f._expansionSequence ? f._expansionSequence.slice(0, 16) : null;
+          // v6.6：步内连续插值安全区（世界米）——游戏毒圈雾是连续收缩，
+          // 整数 safe 只是"本步目标边界"；活跃边 consumed = max(0, count - 1 + frac)，
+          // 非活跃边用整数 count；frac = 1 - expansionTime/10（0→1）。
+          try {
+            const side = (f._expansionSide === undefined) ? -1 : f._expansionSide;
+            const et = (f._expansionTime === undefined) ? 0 : f._expansionTime;
+            const frac = Math.min(1, Math.max(0, 1 - et / 10));
+            const active = (side >= 0 && et > 0 && et <= 10);
+            // 只有**当前活跃边**在步内连续插值；其余边保持整数 count（v6.6b 修正）
+            const smoothCount = (count, isActive) => {
+              const c = count || 0;
+              if (!active || !isActive) return c;
+              return Math.min(c, Math.max(0, c - 1 + frac));
+            };
+            const leftF = smoothCount(f._expansionTilesLeft || 0, side === 2);
+            const rightF = smoothCount(f._expansionTilesRight || 0, side === 0);
+            const topF = smoothCount(f._expansionTilesTop || 0, side === 3);
+            const botF = smoothCount(f._expansionTilesBottom || 0, side === 1);
+            rec.safeSmooth = {
+              x0: ((tb.minX||0) + leftF) * 10,
+              x1: ((tb.maxX||0) - rightF + 1) * 10,
+              y0: ((tb.minY||0) + topF) * 10,
+              y1: ((tb.maxY||0) - botF + 1) * 10,
+              frac: frac,
+              activeSide: active ? side : -1,
+            };
+          } catch(e) {}
+        }
       }
+      out.zones.push(rec);
+      out.storm_zone_count++;
     }
   } catch(e){}
+  try { out.storm_active = (out.storm_zone_count || 0) > 0; } catch(e){}
 
   // scores (all players)
   try {
