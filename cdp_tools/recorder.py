@@ -75,7 +75,10 @@ class CompressedRecorder(Recorder):
     回放：mv 变化时重放迷宫帧；否则沿用上一份墙体。这能大幅缩小文件
     （迷宫每帧可含 100+ 墙段），也让回合切换在诊断时一眼可辨。"""
 
-    STATIC_KEYS = ('walls', 'maze', 'zones')
+    # zones 含 expansionTime/safeSmooth.frac，在线毒圈时**每帧都在变**：
+    # 若放 static，md5 每帧变化 → maze 版本每帧 +1 → 每帧重写全部 walls/maze，
+    # 压缩完全失效（2026-10-27 审计实测 20 帧=20 次 maze 写）。故 zones 归入动态字段。
+    STATIC_KEYS = ('walls', 'maze')
 
     def __init__(self, outfile='tanktrouble_recording.jsonl', append=False):
         super().__init__(outfile, append)
@@ -136,7 +139,19 @@ class CompressedRecorder(Recorder):
 
 async def main():
     args = sys.argv[1:]
-    port = int(args[0]) if len(args) > 0 and args[0].isdigit() else 9222
+    port = 9222
+    if len(args) > 0:
+        if args[0].isdigit():
+            port = int(args[0])
+        else:
+            # 支持 'auto'：自动发现 dsh-ego-browser 动态 CDP 端口
+            try:
+                from ego_browser import resolve_port
+                port = resolve_port(args[0])
+                print(f'[recorder] CDP 端口 {args[0]} -> {port}', flush=True)
+            except Exception as e:
+                print(f'[recorder] 端口解析失败（{e}），回退 9222', flush=True)
+                port = 9222
     out = 'data.jsonl'
     fps = 20
     duration = 0  # 0 = 无限

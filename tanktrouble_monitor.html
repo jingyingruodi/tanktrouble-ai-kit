@@ -72,6 +72,13 @@ function renderCard(port, state){
   }
   const maze = data && data.maze ? `${data.maze.w}×${data.maze.h}格` : '';
   const proj = (data && data.projectiles && data.projectiles.length) || 0;
+  const zones = (data && data.zones) || [];
+  const zone = zones[0] || null;
+  const zsafe = zone && (zone.safeSmooth || zone.safe);
+  const gmName = data && (data.gameModeName || (data.gameMode !== undefined ? ('mode ' + data.gameMode) : '—'));
+  const stormTxt = data && data.storm_active ? '缩圈中' : (data && data.storm ? '未出现' : '关闭');
+  const safeTxt = zsafe ? `${zsafe.x0.toFixed(0)},${zsafe.y0.toFixed(0)} → ${zsafe.x1.toFixed(0)},${zsafe.y1.toFixed(0)}m` : '—';
+  const zvalid = zone && zone.safeTile ? !(zone.safeTile.minX > zone.safeTile.maxX || zone.safeTile.minY > zone.safeTile.maxY) : null;
   return `
     <div class="card">
       <div class="hdr"><h2>实例 ${txt}</h2>${statusHtml(data)}</div>
@@ -83,8 +90,14 @@ function renderCard(port, state){
       </div>
       <div class="roles">${tanksHtml||'<span style="color:var(--dim)">无坦克</span>'}</div>
       <div class="meta">
+        <span>模式: <b>${gmName}</b></span>
+        <span>毒圈: <b>${stormTxt}</b>${zones.length ? ' (' + zones.length + ')' : ''}</span>
+        <span>安全区: <b>${safeTxt}</b></span>
+      </div>
+      <div class="meta">
         <span>击杀: ${Object.keys(scoresK).map(k=>`${k.slice(-4)}:${scoresK[k]}`).join(' ')}</span>
         <span>胜利: ${Object.keys(scoresV).map(k=>`${k.slice(-4)}:${scoresV[k]}`).join(' ')}</span>
+        ${zone && zvalid === false ? '<span class="status off">⚠️ 全图覆盖·安全区归零</span>' : ''}
       </div>
     </div>`;
 }
@@ -112,6 +125,38 @@ function draw(state, port){
     ctx.lineTo(ox+w.x2*s, oy+w.y2*s);
     ctx.stroke();
   });
+  // storm zone（v6.7：safeSmooth 外雾 + 安全区边框；invalid 时红雾）
+  const zone = ((data.zones||[])[0]) || null;
+  if (zone) {
+    const st = zone.safeTile;
+    const invalid = st && (st.minX > st.maxX || st.minY > st.maxY);
+    const zsafe = zone.safeSmooth || zone.safe;
+    if (invalid) {
+      ctx.fillStyle = 'rgba(255,70,70,0.25)';
+      ctx.fillRect(ox, oy, worldW*s, worldH*s);
+      ctx.strokeStyle = '#f85149'; ctx.lineWidth = 3;
+      ctx.strokeRect(ox+2, oy+2, worldW*s-4, worldH*s-4);
+      ctx.fillStyle = '#ffb3b3'; ctx.font = '14px sans-serif';
+      ctx.fillText('全图覆盖 / safeTile invalid', ox+12, oy+24);
+    } else if (zsafe) {
+      const x0 = ox + zsafe.x0*s, y0 = oy + zsafe.y0*s;
+      const x1 = ox + zsafe.x1*s, y1 = oy + zsafe.y1*s;
+      const CL = ox, CT = oy, CR = ox + worldW*s, CB = oy + worldH*s;
+      ctx.fillStyle = 'rgba(120,80,160,0.30)';
+      ctx.fillRect(CL, CT, CR-CL, y0-CT);
+      ctx.fillRect(CL, y1, CR-CL, CB-y1);
+      ctx.fillRect(CL, y0, x0-CL, y1-y0);
+      ctx.fillRect(x1, y0, CR-x1, y1-y0);
+      ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 1.5;
+      ctx.strokeRect(x0, y0, x1-x0, y1-y0);
+      if (zone.safe) {
+        const q = zone.safe;
+        ctx.strokeStyle = 'rgba(227,179,65,0.9)'; ctx.setLineDash([4,3]); ctx.lineWidth = 1;
+        ctx.strokeRect(ox+q.x0*s, oy+q.y0*s, (q.x1-q.x0)*s, (q.y1-q.y0)*s);
+        ctx.setLineDash([]);
+      }
+    }
+  }
   // tanks
   for (const id in (data.tanks||{})){
     const t = data.tanks[id];
