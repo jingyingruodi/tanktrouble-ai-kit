@@ -118,6 +118,16 @@ STATE_JS = r"""
   } catch(e) {}
   try { if (gc.getState) out.phase = gc.getState(); } catch(e){}
   try { if (typeof Constants !== 'undefined' && Constants.getMode) out.mode = String(Constants.getMode()); } catch(e){}
+  // v6.7：战斗模式（Classic/Last Tank Standing、Deathmatch...），与 client online/local 的 mode 区分
+  try {
+    const gcm = (gc.getMode) ? gc.getMode() : null;
+    if (gcm !== null && gcm !== undefined) {
+      out.gameMode = gcm;
+      const MN = (typeof Constants !== 'undefined' && Constants.GAME_MODE_NAME_INFO) ? Constants.GAME_MODE_NAME_INFO : null;
+      const NAMES = ['Last Tank Standing', 'Boot Camp', 'Deathmatch', 'Team Classic', 'Team Deathmatch', 'Capture the Flag'];
+      out.gameModeName = (MN && MN[gcm] !== undefined) ? MN[gcm] : (NAMES[gcm] !== undefined ? NAMES[gcm] : null);
+    }
+  } catch(e) {}
   try { const cl = (typeof ClientManager !== 'undefined' && ClientManager.getClient)
         ? ClientManager.getClient() : null;
         if (cl && cl.getCurrentGameId) out.gameId = cl.getCurrentGameId(); } catch(e){}
