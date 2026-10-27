@@ -40,6 +40,7 @@ rl/                观测/动作/数据集雏形（未训练）
 ```powershell
 python -m pip install -r requirements.txt
 python scripts/start_local_game.py auto --players 2 --restart   # 本地双人对局
+python scripts/start_local_storm.py auto --players 2 --hold 20 # 本地开毒圈（开发测试，游戏 tab 需前台）
 ```
 
 **Linux / macOS**
