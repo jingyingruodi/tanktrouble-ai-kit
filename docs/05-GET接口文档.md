@@ -170,10 +170,19 @@ if (side === 2) minX = tb.minX + Math.max(0, fields._expansionTilesLeft - 1 + fr
 if (side === 3) minY = tb.minY + Math.max(0, fields._expansionTilesTop - 1 + frac);
 ```
 
-> ⚠️ **以下"平滑插值"公式在当前项目里并未实现**：现役提取器
-> `gameutils.extract_storm_zones` / `get_storm_zones` 只做**整数 tile 边界**计算
-> （`minX+expLeft` 等），不使用 `_expansionTime` 做步内插值。此处的公式属于
-> Tampermonkey 时期的渲染参考，不要假设现役代码具备它。
+**`zones[].nTiles` 语义（2026-10-27 明确）**：`STATE_JS` 中 `nTiles = Zone.getTiles().length`，
+是**毒圈雾/威胁 tile 数**（游戏 AI 的 threatMap 也用它），**不是安全区格数**，且全图覆盖时也可能非零
+（实测 invalid safeTile 时 nTiles 仍=25）。判"全图覆盖/安全区归零"请用
+`safeTile.minX > maxX || minY > maxY`（或 `safeSmooth` 宽/高 ≤0），不要用 `nTiles`。
+
+**关于步内平滑**：`gameutils.extract_storm_zones` / `get_storm_zones` 仍只做整数 tile 边界；
+但监控状态接口 **v6.6 起 `zones[].safeSmooth`** 已实现本文公式（仅活跃边插值），
+并已在 docs/27 §4.4–§4.6 用在线像素验证（残余为雾贴图有机波动，见下）。
+像素比对容差建议 ≥3 m（HALLOWEEN 等主题雾团边缘可内偏 1.5–2.9 m）。
+
+**在线长读纪律（2026-10-27）**：在线房间中长时间 `state()`/截图时**游戏 tab 必须保持前台**；
+后台 tab 会让 Phaser rAF 暂停（`raf_frame` 冻结）并最终导致掉线。监控页轮询不要长期抢占前台，
+截图前 `activate_page`、截完立即切回。
 
 **Box2D 物理结构**：`getB2DBody()` 返回 4 个 Fixture（边墙矩形条），顶点在 `GetShape().m_vertices`（世界米，×PPM=20 转像素）。
 
