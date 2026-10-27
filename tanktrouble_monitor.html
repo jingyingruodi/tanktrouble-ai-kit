@@ -68,7 +68,7 @@ function renderCard(port, state){
     const role = roles[id] || '?';
     const color = role==='arrows' ? '#f85149' : role==='keyboard' ? '#58a6ff' : '#3fb950';
     const rect = `/2×4m`;
-    tanksHtml += `<span class="tank"><span class="dot" style="background:${color}"></span> ${role} · ${id.slice(-5)} · ${t.x.toFixed(0)},${t.y.toFixed(0)} · 武${t.weapon}</span>`;
+    tanksHtml += `<span class="tank"><span class="dot" style="background:${color}"></span> ${role} · ${id} · ${t.x.toFixed(0)},${t.y.toFixed(0)} · 武${t.weapon}</span>`;
   }
   const maze = data && data.maze ? `${data.maze.w}×${data.maze.h}格` : '';
   const proj = (data && data.projectiles && data.projectiles.length) || 0;
@@ -95,8 +95,8 @@ function renderCard(port, state){
         <span>安全区: <b>${safeTxt}</b></span>
       </div>
       <div class="meta">
-        <span>击杀: ${Object.keys(scoresK).map(k=>`${k.slice(-4)}:${scoresK[k]}`).join(' ')}</span>
-        <span>胜利: ${Object.keys(scoresV).map(k=>`${k.slice(-4)}:${scoresV[k]}`).join(' ')}</span>
+        <span>击杀: ${Object.keys(scoresK).map(k=>`${k}:${scoresK[k]}`).join(' ')}</span>
+        <span>胜利: ${Object.keys(scoresV).map(k=>`${k}:${scoresV[k]}`).join(' ')}</span>
         ${zone && zvalid === false ? '<span class="status off">⚠️ 全图覆盖·安全区归零</span>' : ''}
       </div>
     </div>`;
@@ -184,20 +184,56 @@ function draw(state, port){
   });
 }
 
+const RETRY_MS = 3000;      // WS 断线重连间隔
+const STALE_MS = 8000;      // 超过该时间无帧 → 主动断开重连
+const conns = {};           // port -> {ws, last, retryTimer}
+
+function markOffline(port, msg){
+  const card = document.getElementById('card-'+port);
+  if (!card) return;
+  const st = card.querySelector('.status');
+  if (st) st.innerHTML = `<span class="status off">${msg||'离线·重连中…'}</span>`;
+}
+
 function connect(port){
+  const old = conns[port];
+  if (old && old.ws && old.ws.readyState <= 1) return;   // 已连接/连接中
+  if (old && old.retryTimer){ clearTimeout(old.retryTimer); old.retryTimer = null; }
   const ws = new WebSocket(`ws://localhost:${port}`);
-  ws.onopen = ()=>{ wsList.push({port, ws}); };
+  const rec = {ws, last: Date.now(), retryTimer: null};
+  conns[port] = rec;
+  ws.onopen = ()=>{
+    rec.last = Date.now();
+    wsList = wsList.filter(x=>x.port!==port).concat([{port, ws}]);
+  };
   ws.onmessage = (ev)=>{
+    rec.last = Date.now();
     const state = JSON.parse(ev.data);
     let host = livePorts.indexOf(port);
-    if (host < 0){ livePorts.push(port); renderBase(port, state); }
-    else renderBase(port, state);
+    if (host < 0) livePorts.push(port);
+    renderBase(port, state);
     // 只在有数据时绘制（若 err 则不重绘 canvas）
     if (!(state.data && state.data.err)) draw(state, port);
   };
-  ws.onclose = ()=>{ /* 保留卡片标记离线 */ };
-  ws.onerror = ()=>{};
+  ws.onclose = ()=>{
+    markOffline(port, '离线·重连中…');
+    if (rec.retryTimer) clearTimeout(rec.retryTimer);
+    rec.retryTimer = setTimeout(()=>{ rec.retryTimer = null; connect(port); }, RETRY_MS);
+  };
+  ws.onerror = ()=>{ try{ ws.close(); }catch(e){} };
 }
+
+// 心跳：monitor_server 重启/半开连接时，主动断开触发重连
+setInterval(()=>{
+  const now = Date.now();
+  for (const port of livePorts){
+    const rec = conns[port];
+    if (!rec || !rec.ws || rec.ws.readyState > 1 || now - rec.last > STALE_MS){
+      try { if (rec && rec.ws) rec.ws.close(); } catch(e){}
+      connect(port);
+    }
+  }
+}, 2000);
 
 function renderBase(port, state){
   const grid = document.getElementById('grid');
