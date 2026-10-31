@@ -663,6 +663,15 @@ class InstanceMonitor:
 
 async def main():
     args = sys.argv[1:]
+    if '--help' in args or '-h' in args:
+        print(__doc__)
+        return 0
+    try:
+        import websockets  # noqa: F401
+    except ImportError:
+        print('[monitor] ❌ 缺少 websockets：先运行 ./setup-linux.sh，'
+              '或 source .venv/bin/activate', flush=True)
+        return 2
     cdp_count = int(args[0]) if len(args) > 0 and args[0].isdigit() else 2
     if len(args) > 1 and args[1] == 'auto':
         # 端口写 'auto'：自动发现 dsh-ego-browser 的动态 CDP 端口
@@ -702,4 +711,4 @@ async def main():
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))
