@@ -13,7 +13,7 @@
 =============================
 把 `recorder` 产出的 JSONL（含**动作标签**的记录）直接变成训练样本流：
 
-    for s in iter_samples('data/rollout.jsonl', pid='22768269'):
+    for s in iter_samples('data/rollout.jsonl', pid='<your-pid>'):
         s['obs']          # 观测向量（定长）
         s['action_index'] # 离散动作索引（0..10），无法归类时 None
         s['bits']         # 原始 5 位掩码（完整动作空间用这个）

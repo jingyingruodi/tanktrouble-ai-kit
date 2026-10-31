@@ -33,8 +33,8 @@ TankTrouble — 官方弹道 + 我们自己的命中预测
      自伤风险、以及是否被护盾/出生点挡住。
 
 用法：
-    python scripts/official_aim.py auto --target 22768270                 # 只算角度
-    python scripts/official_aim.py auto --target 22768270 --fire          # 算了就开火验证
+    python scripts/official_aim.py auto --target <目标 pid>                 # 只算角度
+    python scripts/official_aim.py auto --target <目标 pid> --fire          # 算了就开火验证
     python scripts/official_aim.py auto --path-only                       # 只看当前朝向的预测折线
 """
 import argparse

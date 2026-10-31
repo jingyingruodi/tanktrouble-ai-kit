@@ -426,7 +426,7 @@ async def main():
         await asyncio.sleep(1)
     print('[online] 回合状态=%s' % rnd, flush=True)
     # ★ 健壮性：等坦克真正进坦克表（新服务端下房间刚建好时可能短暂缺席，
-    #   直接取 [pids[0]] 会 KeyError: '22838087'）
+    #   直接取 [pids[0]] 会 KeyError: '<pid>'）
     before = None
     for _ in range(20):
         t = await ctl.tanks()

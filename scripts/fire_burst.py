@@ -28,7 +28,7 @@
 
 用法：
     python scripts/fire_burst.py auto --shots 6 --hold 0.8 --gap 2.5
-    python scripts/fire_burst.py auto --shots 4 --hold 1.0 --gap 3 --pid 22811932
+    python scripts/fire_burst.py auto --shots 4 --hold 1.0 --gap 3 --pid <可控角色 pid>
 """
 import argparse
 import asyncio

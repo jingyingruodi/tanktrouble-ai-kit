@@ -24,4 +24,10 @@ Thumbs.db
 dist/
 *.zip
 *.7z
+# ---- 本地运行日志/临时文件 ----
+*.log
+*.err
+monitor_run.*
+patch.out
+kit/config.json
 

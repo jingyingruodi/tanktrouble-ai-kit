@@ -1,9 +1,33 @@
-# ttkit —— TankTrouble 角色控制黑盒工具包（v11）
+# ttkit —— TankTrouble 角色控制工具包（v12）
 
-本目录是**受限工作目录**：你只能读写本目录内的文件。`ttkit/` 用于**读取游戏状态**与
-**操作角色**；游戏已在运行（本地/在线），CDP 端口见 `config.json`（默认 62202）。
+`ttkit/` 是 TankTrouble AI Research Kit 的**黑盒封装包**：读取游戏状态、操作角色、
+做弹道预测与火控。它通过 CDP 连接一个已经打开的 TankTrouble 页面（本地局或自建房间），
+所有控制都走游戏自己的输入链路。
+
+> 仅限学习/研究使用；**不要用于公开在线对局**。详见仓库根目录的
+> [NOTICE](../NOTICE)、[RISK-ASSESSMENT.md](../RISK-ASSESSMENT.md) 与 [docs/19](../docs/19-免责声明与合规边界.md)。
 
 ## 1. 快速开始
+
+无需安装，从**仓库根目录**把 `kit/` 加入模块路径即可：
+
+```bash
+# Linux / macOS
+PYTHONPATH=kit python your_script.py
+
+# Windows PowerShell
+$env:PYTHONPATH="kit"; python your_script.py
+```
+
+也可以在脚本开头：
+
+```python
+import sys
+sys.path.insert(0, "kit")
+```
+
+连接前请确认游戏页面已经运行且 CDP 端口可达（默认 62202；端口配置可参考
+`kit/config.example.json`，或直接 `Kit(port=...)`）。
 
 ```python
 import asyncio
@@ -14,7 +38,7 @@ async def main():
     pid = await kit.my_pid()               # 默认 arrows；找不到抛 RuntimeError
     print(await kit.ammo(pid))             # {'left':5,'fired':0,'remaining':5,'weapon':-1}
     print(await kit.kills_of(pid))         # {'kills':0,'victories':0}（比分归因，最可靠）
-    print(await kit.round_id())            # 'rc-021b-6'
+    print(await kit.round_id())            # 回合 id
     r = await kit.turn_to_angle(pid, 1.2)  # 世界方向角（弧度）
     print(r)  # {'ok','actual_deg'(归一化),'err_deg','final_err_deg','outlier','precise'}
     await kit.close()
@@ -22,14 +46,14 @@ async def main():
 asyncio.run(main())
 ```
 
-## 1.5 本轮场景：**移动对手**（重要）
+## 1.5 移动目标场景（重要）
 
-本轮对手是**会移动的**（由外部脚本驱动，随机游走）。打固定靶 ≠ 打移动靶：
+打固定靶 ≠ 打移动靶：
 
 * 弹丸飞到目标需要时间（基础弹 18 m/s → 80m 约 4.4s），目标会移动；
-* 必须用 **`lead_target(pid, target_id)`** 估算"弹丸到达时目标的位置"，
+* 用 **`lead_target(pid, target_id)`** 估算“弹丸到达时目标的位置”，
   再对该预测位置做选角/瞄准/复核；
-* 或者直接用 **`aim_at_moving(pid, target_id)`**（= lead_target + aim_and_fire 完整开火门）；
+* 或直接用 **`aim_at_moving(pid, target_id)`**（= lead_target + aim_and_fire 完整开火门）；
 * `target_velocity(target_id)` 可读目标实时速度（米/秒）；
 * 命中判定用 `kills_of()` 比分增量（飞行时间可能数秒，别过早判 miss）。
 
@@ -108,9 +132,9 @@ asyncio.run(main())
 
 `quality = traveled + 30×bounces + 5×max(0, 20-self_risk)`（越小越可靠）。
 
-## 4. 任务：写 `agent_ai.py`
+## 4. 推荐的控制流程
 
-1. `roles()` / `my_pid()` 锁定自己的角色；**所有控制只对这个 pid**（统一 `_own()` 断言 + 按 pid 统计）。
+1. `roles()` / `my_pid()` 锁定自己的角色；**所有控制只对这个 pid**（自己加断言/统计护栏）。
 2. 每回合 `reset_maze_cache()`；开火前查 `ammo().remaining`；用 `round_id()` 判断回合切换。
 3. **静默扫描**：`scan_adaptive(pid, target_id=opp)`（自动多档），候选按 `quality` 升序。
 4. **找到** → 立即 `stop` → `turn_to_angle` → **重读实际朝向 `raycast` 复核**
@@ -118,15 +142,17 @@ asyncio.run(main())
    → 通过才 `fire`；否则换解/机动。
 5. **没找到** → `nearest_opponent` + `navigate_segment` 分段逼近，段间继续扫描。
 6. 开火后用 **比分增量**（`kills_of`）判断命中；同位置同方向打偏过就别重复打。
-7. 循环到 `--seconds`（默认 90）。回合切换/不在场 → 等 1s；每轮日志带 **pid**。
+7. 循环到目标时长；回合切换/不在场 → 等 1s；每轮日志带 **pid**。
 
-## 5. 交付与验收
+## 5. 自检与排障
 
-* `python agent_ai.py --seconds 90`，贴关键日志与统计（扫描/开火/命中/寻路/错误数）。
-* 证明**只控自己 pid**（按 pid 统计；`ttkit._require` 只校验"是不是可控角色"，护栏自己加）。
-* 报告使用 ttkit 时发现的**任何问题/不便**，以及"预测能中但实际没中/误伤自己"的现场日志。
+* 先运行 `python scripts/selftest_platform.py`（跨平台环境自检），再运行
+  `python scripts/selftest_monitor.py`（需游戏在局中，验证监控/录制/回放链路）。
+* 用 `roles()`/`my_pid()` 确认角色绑定；不要在未确认 pid 归属时发控制。
+* 发现 API/环境问题，请附带最小复现命令、日志与客户端版本信息提交 issue；
+  不要在 issue 中粘贴他人 cookie、账号或未脱敏的对局数据。
 
-## 6. v8 使用建议（必读）
+## 6. 使用建议
 
 1. **选角用 `reachable_windows()`**，不要“先 scan 选角 → 再 snap”两步走；
    拿 `grid_deg` 去 `turn_to_angle`，转完**再按实际朝向 raycast 复核**（拓扑对 0.09° 敏感）。
@@ -152,3 +178,10 @@ asyncio.run(main())
 * `navigate_to` 慢（~1.5~7 m/s）且打印 `[nav]`；用 `navigate_segment` 分段。
 * 在线输入上报粒度 0.5s（hold ≥0.6s）；本地可更短。
 
+
+## 许可与合规
+
+本包为 MIT 许可的原创代码；不包含任何游戏客户端、美术、音频或地图资源。
+TankTrouble 及其相关名称/商标归其权利人所有，本项目与其无关联。
+在线自动化仅限**自建且房间内全部 pid 属于本连接**的研究场景；一旦出现陌生 pid，
+立即停止并退出。禁止用于公开在线对局。
