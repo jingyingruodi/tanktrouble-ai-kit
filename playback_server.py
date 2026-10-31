@@ -104,16 +104,16 @@ async def serve(frames, port, fps, loop):
 
 
 async def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ('-h', '--help'):
+        print(__doc__)
+        return 0 if args else 1
     try:
         import websockets  # noqa: F401
     except ImportError:
         print('[playback] ❌ 缺少 websockets：先运行 setup-linux.sh，'
               '或 source .venv/bin/activate', flush=True)
         return 2
-    args = sys.argv[1:]
-    if not args:
-        print(__doc__)
-        return 1
     path = args[0]
     port = int(args[1]) if len(args) > 1 and args[1].isdigit() else 9314
     fps = 20
