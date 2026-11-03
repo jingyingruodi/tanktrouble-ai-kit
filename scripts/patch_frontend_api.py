@@ -48,7 +48,10 @@ SCRATCH = os.path.join(HERE, 'scratch')
 SIGNATURES = """
   const SIG = {
     ClientManager:  c => c && c.client !== undefined && c.clientId !== undefined,
-    GameManager:    c => c && (c.phaserInstance !== undefined || typeof c.getGameController === 'function'),
+    // 2026-11-04 前端更新：必须同时有 phaserInstance 和 getGameController，
+    // 避免误匹配只有 phaserInstance 的普通函数/类（新 bundle 里曾把 window.GameManager
+    // 指到一个 Function 上，导致 GameManager.getGameController 不存在）。
+    GameManager:    c => c && c.phaserInstance !== undefined && typeof c.getGameController === 'function',
     Users:          c => c && c.guestUsers !== undefined && c.authenticatedUsers !== undefined,
     Constants:      c => c && c.GAME_MODES !== undefined && (c.MAZE_TILE_SIZE !== undefined || c.METERS_PER_PIXEL !== undefined || c.SERVER !== undefined),
     Inputs:         c => c && (c.inputManagers !== undefined || c._playerIdInputSetId !== undefined || typeof c._assignInput === 'function'),
