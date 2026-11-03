@@ -120,3 +120,5 @@ python3 scripts/selftest_monitor.py    # 监控/录制/回放自检（需游戏�
 - 研究索引：[docs/README.md](docs/README.md)
 - 风险与合规：[RISK-ASSESSMENT.md](RISK-ASSESSMENT.md)
 - 安全提示：[SECURITY.md](SECURITY.md)
+
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
