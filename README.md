@@ -43,6 +43,7 @@ rl/                观测/动作/数据集雏形（未训练）
 ```powershell
 python -m pip install -r requirements.txt
 python scripts/start_local_game.py auto --players 2 --restart   # 本地双人对局
+python scripts/measure_gatling.py 9222 --role arrows --fire-sec 1.2  # Gatling 本地量测（[docs/30](docs/30-Gatling-2026-11-10实测.md)）
 python scripts/start_local_storm.py auto --players 2 --hold 20 # 本地开毒圈（开发测试，游戏 tab 需前台）
 ```
 
@@ -67,6 +68,7 @@ API 用法见 [kit/README.md](kit/README.md)。
 | 官方弹道 vs 实弹 | 官方 `calculateProjectilePath` 是**零宽射线**，掠射/多反弹有累积偏差 |
 | 行为 AI 命中率 | 静止靶（小图）最高 **100%**；移动靶：朴素打法 16% → 提前量+对点选角 **67%** |
 | 控错角色 | 11 轮黑盒测试全部"只控自己 pid"（需应用层护栏，包只校验"可控角色"） |
+| Gatling（2026-11-09 加强后） | 本地 fresh 1.2s×3：**12 发/次；首发约 0.2s；间隔 89.5ms → 充满后约 11.1 发/秒**（窗口均值约 10/s）；人工发放武器，不可直接当自然对局 DPS（[docs/30](docs/30-Gatling-2026-11-10实测.md)） |
 
 
 ## 监控室 / 录制 / 回放

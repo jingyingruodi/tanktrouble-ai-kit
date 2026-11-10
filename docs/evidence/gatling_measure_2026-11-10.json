@@ -1,0 +1,126 @@
+{
+  "date": "2026-11-10",
+  "frontend_bundle": "index-V5RFPD54.js",
+  "game_update": "2026-11-09 news \"Gatling Gun Gets Caffeinated\"",
+  "scope": "本地研究局，人工通过 roundController.spawnCrate/pickUpCrate 发放 Gatling；非自然拾取；仅本地",
+  "method": {
+    "fresh_restart": "每次试验前 start_local_game.py --restart，保证 before_type=-1（没有旧 Gatling 排队）",
+    "fire_sec": 1.2,
+    "ammo_reset": "_bulletCount=20、_weaponCharge=0、_timeSinceFire=0、_newBurst=true、_bulletsFired=0",
+    "recorder": "页面内 5ms 轮询；开火前已有 projectile id 作为 baseline；只统计新 id；窗口 1.2s+60ms 容差",
+    "validation": "要求 round_changed=false 且 weapon=5；2 发截断样本已丢弃"
+  },
+  "trials": [
+    {
+      "file": "trial1.json",
+      "round_id": "rc-9d12-6",
+      "round_changed": false,
+      "before_type": -1,
+      "weapon_type": 5,
+      "projectiles_generated": 12,
+      "first_projectile_rel_ms": 220.5,
+      "projectile_intervals_ms": [
+        80.9,
+        83.9,
+        99.7,
+        85.5,
+        82.3,
+        99.2,
+        83.2,
+        100.9,
+        84.3,
+        82.3,
+        100.9
+      ],
+      "projectiles_per_sec_window": 10.0,
+      "bullet_count_min": 8,
+      "bullet_count_max": 20,
+      "charge_max": 1
+    },
+    {
+      "file": "trial3.json",
+      "round_id": "rc-f04e-6",
+      "round_changed": false,
+      "before_type": -1,
+      "weapon_type": 5,
+      "projectiles_generated": 12,
+      "first_projectile_rel_ms": 195.9,
+      "projectile_intervals_ms": [
+        83.1,
+        83.6,
+        99.8,
+        83.7,
+        85.6,
+        98.9,
+        82.5,
+        100.1,
+        84.2,
+        82.9,
+        100.5
+      ],
+      "projectiles_per_sec_window": 10.0,
+      "bullet_count_min": 8,
+      "bullet_count_max": 20,
+      "charge_max": 1
+    },
+    {
+      "file": "trial4.json",
+      "round_id": "rc-a560-6",
+      "round_changed": false,
+      "before_type": -1,
+      "weapon_type": 5,
+      "projectiles_generated": 12,
+      "first_projectile_rel_ms": 198.5,
+      "projectile_intervals_ms": [
+        84.7,
+        81.2,
+        101.9,
+        81.6,
+        83.5,
+        100.8,
+        82.9,
+        100.6,
+        83.6,
+        83.5,
+        100.2
+      ],
+      "projectiles_per_sec_window": 10.0,
+      "bullet_count_min": 8,
+      "bullet_count_max": 20,
+      "charge_max": 1
+    }
+  ],
+  "aggregate": {
+    "n_trials": 3,
+    "projectiles_per_1_2s": [
+      12,
+      12,
+      12
+    ],
+    "mean_projectiles_per_trial": 12,
+    "mean_first_projectile_rel_ms": 204.97,
+    "min_first_projectile_rel_ms": 195.9,
+    "max_first_projectile_rel_ms": 220.5,
+    "mean_interval_ms": 89.47,
+    "min_interval_ms": 80.9,
+    "max_interval_ms": 101.9,
+    "stable_fire_rate_per_sec": 11.111,
+    "window_average_per_sec": 10.0,
+    "bullet_count_start": 20,
+    "bullet_count_end": 8
+  },
+  "live_constants": {
+    "GATLING_GUN_CHARGE_TIME_sec": 0.2,
+    "GATLING_GUN_FIRE_RATE_sec": 0.09,
+    "GATLING_GUN_AMMO_COUNT": 20,
+    "GATLING_GUN_MAX_LIFETIME_sec": 2
+  },
+  "caveats": [
+    "人工发放武器；绕过自然 crate 拾取/碰撞/队列规则，不能直接当自然对局 DPS。",
+    "首发约 0.2s 成立；精确 219ms 不是常数，独立复核范围约 188–221ms（含输入/帧相位）。",
+    "1.2s 窗口平均约 10 发/秒；充满后稳定射速约 11.1 发/秒（90ms/发），不要把 10/s 当持续射速。",
+    "1.2s 窗口可能遇到回合中途结束（独立复核遇到 7/2 发截断样本），必须重启本地局并校验 12 发/weapon=5。",
+    "未测自然拾取、拾取 crate 后不停火、DPS/每发伤害、旧版严格对比、在线对局。",
+    "kit.ammo 本地遥测不可靠（仍显示 left=5/fired=0），本数据用 _bulletCount 20→8。"
+  ]
+}
