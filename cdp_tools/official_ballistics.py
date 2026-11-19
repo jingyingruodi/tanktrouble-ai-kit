@@ -119,8 +119,11 @@ WEAPONS = {
                        'shrapnel_radius': 0.10,
                        'shrapnel_speed_min': 25.0, 'shrapnel_speed_max': 30.0,
                        'notes': '★ 2026-11-19 新武器：弹速 18m/s、寿命 7s（FRAG_BOMB_MAX_LIFETIME）、'
-                                '炮口偏移 2.25m、弹体半径 0.7m；接触/触发后 0.4s 引爆'
-                                '（FRAG_BOMB_DETONATION_DELAY），生成 30 个径向破片'
+                                '炮口偏移 2.25m、弹体半径 0.7m；三种引爆：'
+                                '① 撞坦克立即 detonate；② 寿命耗尽立即 detonate；'
+                                '③ 发射后松开再按一次发射键 → trigger()，经 0.4s'
+                                '（FRAG_BOMB_DETONATION_DELAY）后 detonate。'
+                                '撞墙只会反弹，不触发引爆；生成 30 个径向破片'
                                 '（type=7，半径 0.1m，速度 25~30m/s，按当前公式随机）。'
                                 '⚠️ 破片/爆炸范围不是普通镜面弹道，scan/official_ballistics 只给出母弹直线段，'
                                 '不能当完整命中判定。'},
