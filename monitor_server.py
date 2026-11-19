@@ -267,7 +267,13 @@ STATE_JS = r"""
       MAXLIFE[3] = Constants.C_HOMING_MISSILE_MAX_LIFETIME;
       MAXLIFE[4] = Constants.C_BULLET_MAX_LIFETIME;
       MAXLIFE[5] = Constants.C_GATLING_GUN_MAX_LIFETIME;
+      // 2026-11-19: Frag Bomb 母弹；破片 type=7 没有独立寿命常量，
+      // 这里不硬编码，维持 fallback，避免把猜测当官方值。
+      MAXLIFE[6] = Constants.C_FRAG_BOMB_MAX_LIFETIME || 7;
     } catch(e){}
+    const PTYPE = {'-1':'BULLET','0':'LASER','1':'DOUBLE_BARREL','2':'SHOTGUN',
+                   '3':'HOMING_MISSILE','4':'MINE_SHRAPNEL','5':'GATLING_GUN',
+                   '6':'FRAG_BOMB','7':'FRAG_BOMB_SHRAPNEL'};
     for (const pid in raw) {
       const p = raw[pid];
       let owner = '';
@@ -280,7 +286,8 @@ STATE_JS = r"""
       const lifetime = timeAlive >= 0 ? Math.max(0, maxLife - timeAlive) : maxLife;
       out.projectiles.push({id:pid, x:p.getX?p.getX():0, y:p.getY?p.getY():0,
         vx:p.getSpeedX?p.getSpeedX():0, vy:p.getSpeedY?p.getSpeedY():0,
-        type:type, owner:owner, timeAlive:timeAlive, deadlyToOwner:deadly,
+        type:type, typeName:(PTYPE[type]||('TYPE_'+type)),
+        owner:owner, timeAlive:timeAlive, deadlyToOwner:deadly,
         lifetime:lifetime, maxLifetime:maxLife});
     }
   } catch(e){}

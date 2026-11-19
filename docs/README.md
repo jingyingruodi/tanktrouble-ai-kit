@@ -52,6 +52,7 @@
 | [28](28-前端2026-10-28适配-2026-11-04.md) | **前端 2026-10-28 版本适配** | 新版 bundle 贴图 404/黑块、`GameManager` 签名误匹配修复；local game、test_interface 5/5、selftest PASS |
 | [29](29-前端2026-11-10更新核对-2026-11-10.md) | **前端 2026-11-09/11-10 更新核对** | 新 bundle 打补丁、local game/test_interface 5/5；新闻页后台会冻结 Phaser；Gatling 加强的威胁建模影响 |
 | [30](30-Gatling-2026-11-10实测.md) | **Gatling 2026-11-09 加强后的本地量测** | fresh 1.2s×3：12 发/次；首发约 0.2s；间隔 89.5ms → 充满后约 11.1 发/秒；人工发放/窗口截断局限已标注 |
+| [31](31-前端2026-11-19-FragBomb适配.md) | **前端 2026-11-19 / Frag Bomb 适配** | 新 bundle 重打补丁；weapon 6、projectile 6/7、30 破片常量；kit maps/monitor/ballistics 更新；test_interface 5/5、selftest PASS |
 
 ---
 

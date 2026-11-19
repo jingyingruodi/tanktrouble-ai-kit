@@ -94,10 +94,10 @@ asyncio.run(main())
 | `position(pid)` / `position_confirm(pid)` / `rotation(pid)` / `rotation_norm(pid)` | 状态（`rotation` 瞬时 None 会重试） |
 | `alive(pid)` / `destroyed_pids()` | 存活 / 已摧毁列表 |
 | `opponents(my_pid)` / `nearest_opponent(my_pid)` | 对手 / 最近对手 |
-| `weapon(pid)`（可能 None）/ `bullet_range(pid)` / `range_of(w)` | 武器与射程 |
-| `ammo(pid)` | **v7**：`{'left','fired','remaining','weapon','type'}`；`left` 是弹匣容量、`fired` 是本回合已发射数、**真正剩余 = `remaining`**；多武器时按当前武器类型匹配条目 |
+| `weapon(pid)`（可能 None）/ `bullet_range(pid)` / `range_of(w)` | 武器与射程；**2026-11-19 起 `6=FRAG_BOMB`** |
+| `ammo(pid)` | **v7**：`{'left','fired','remaining','weapon','type'}`；`left` 是弹匣容量、`fired` 是本回合已发射数、**真正剩余 = `remaining`**；多武器时按当前武器类型匹配条目；Frag Bomb 是一发制，弹链字段可能为 None |
 | `scores()` / `kills_of(pid)` | **v6：比分/击杀（开火后归因最可靠）** |
-| `bullets_in_flight(pid=None)` | 场上弹丸（可按发射者过滤） |
+| `bullets_in_flight(pid=None)` | 场上弹丸（可按发射者过滤）；**type=6 母弹、type=7 为 30 个 Frag Bomb 破片**，不能当普通子弹扫描 |
 | `terrain()` / `open_tiles()` / `plan_path(a,b)` / `maze_distance(a,b)` | 地形/寻路 |
 | `wait_target_gone(target_id, timeout=8)` | 等待目标离场（回合切换也会 True，需搭配比分判断） |
 | `reset_maze_cache()` | 清空行为层墙缓存（每回合迷宫重生成，跨回合要清） |

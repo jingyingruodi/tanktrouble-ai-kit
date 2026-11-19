@@ -111,6 +111,19 @@ WEAPONS = {
                                '**半径 0.10m（比基础弹小）、炮口 3.0m**；'
                                '弹速 25.4~29.6（常数 25~30）、散布 σ≈1.58°（常数 BULLET_SPREAD=0.1）。'
                                '⚠️ 在线输入粒度 0.5s → 在线要按住 **≥0.6s** 才可能出弹'},
+    # 破片炸弹：2026-11-19 新武器（WEAPON_TYPES.FRAG_BOMB=6）
+    'frag_bomb':      {'speed': 18.0,  'lifetime': 7.0,  'fire_delay_ms': None, 'charge_ms': 0,
+                       'spread_deg': 0.0, 'ammo': 1, 'radius': 0.70, 'muzzle_offset': 2.25,
+                       'bounces_max': None,
+                       'detonation_delay': 0.4, 'shrapnel_count': 30,
+                       'shrapnel_radius': 0.10,
+                       'shrapnel_speed_min': 25.0, 'shrapnel_speed_max': 30.0,
+                       'notes': '★ 2026-11-19 新武器：弹速 18m/s、寿命 7s（FRAG_BOMB_MAX_LIFETIME）、'
+                                '炮口偏移 2.25m、弹体半径 0.7m；接触/触发后 0.4s 引爆'
+                                '（FRAG_BOMB_DETONATION_DELAY），生成 30 个径向破片'
+                                '（type=7，半径 0.1m，速度 25~30m/s，按当前公式随机）。'
+                                '⚠️ 破片/爆炸范围不是普通镜面弹道，scan/official_ballistics 只给出母弹直线段，'
+                                '不能当完整命中判定。'},
 }
 
 # 默认几何参数（坦克半径按 p2 车体实测 ~2.2m；弹丸半径待精测，先给保守 0.3m）

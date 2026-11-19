@@ -1,0 +1,47 @@
+{
+  "date": "2026-11-19",
+  "weapon": 6,
+  "weapon_name": "FRAG_BOMB",
+  "pid": "22922424",
+  "setup": {
+    "ok": true,
+    "pid": "22922424",
+    "before": -1,
+    "weapon": 6,
+    "tank": [
+      5,
+      5
+    ],
+    "keys": [
+      "id",
+      "playerId",
+      "type",
+      "roundModel",
+      "eventHandler",
+      "eventContext",
+      "log",
+      "_triggerPulled",
+      "_fired",
+      "_aliveFragBombId"
+    ]
+  },
+  "first_projectile_type": 7,
+  "first_projectile_name": "FRAG_BOMB_SHRAPNEL",
+  "first_shrapnel_ms": 324.0,
+  "peak_shrapnel": 9,
+  "total_projectile_ids": 9,
+  "timeline": [
+    {
+      "t": 0.324,
+      "counts": {
+        "7": 9
+      },
+      "new": 9,
+      "new_types": [
+        7
+      ]
+    }
+  ],
+  "weapon_end": null,
+  "note": "本地局人工发放；遇墙/接触会提前引爆；不是自然拾取 DPS 数据"
+}

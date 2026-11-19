@@ -84,21 +84,33 @@ _DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(_
 
 __all__ = ['Kit', 'BULLET_SPEED', 'BULLET_LIFETIME', 'TANK_RADIUS',
            'TANK_FORWARD_SPEED', 'TANK_BACK_SPEED', 'TANK_ROTATION_SPEED',
-           'WEAPON_NAMES', 'MUZZLE_OFFSET', 'WEAPON_RANGE', 'SELF_RISK_RADIUS']
+           'WEAPON_NAMES', 'PROJECTILE_NAMES', 'MUZZLE_OFFSET', 'WEAPON_RANGE',
+           'SELF_RISK_RADIUS']
 
+# 2026-11-19 新增 FRAG_BOMB=6；破片是独立 projectile type 7，不是 weapon type。
 WEAPON_NAMES = {-1: 'BULLET', 0: 'LASER', 1: 'DOUBLE_BARREL', 2: 'SHOTGUN',
-                3: 'HOMING_MISSILE', 4: 'MINE', 5: 'GATLING_GUN'}
+                3: 'HOMING_MISSILE', 4: 'MINE', 5: 'GATLING_GUN',
+                6: 'FRAG_BOMB'}
+PROJECTILE_NAMES = {
+    -1: 'BULLET', 0: 'LASER', 1: 'DOUBLE_BARREL', 2: 'SHOTGUN',
+    3: 'HOMING_MISSILE', 4: 'MINE_SHRAPNEL', 5: 'GATLING_GUN',
+    6: 'FRAG_BOMB', 7: 'FRAG_BOMB_SHRAPNEL',
+}
 # 炮口偏移（米）
-MUZZLE_OFFSET = {-1: 2.50, 0: 2.50, 1: 2.25, 2: 2.45, 3: 2.50, 4: 1.45, 5: 3.00}
-# 射程（米）= 弹速 × 寿命
-WEAPON_RANGE = {-1: 180.0, 0: 144.0, 1: 108.0, 2: 64.0, 3: 180.0, 4: 0.0, 5: 54.0}
+MUZZLE_OFFSET = {-1: 2.50, 0: 2.50, 1: 2.25, 2: 2.45, 3: 2.50, 4: 1.45,
+                 5: 3.00, 6: 2.25}
+# 射程（米）。FRAG_BOMB 按 7s 寿命 × 18m/s 的理论上限先给 126m；
+# 实际遇敌会提前引爆，具体有效范围由 30 破片/爆炸决定，需实测。
+WEAPON_RANGE = {-1: 180.0, 0: 144.0, 1: 108.0, 2: 64.0, 3: 180.0,
+                4: 0.0, 5: 54.0, 6: 126.0}
 
 def _wrap_pi(a):
     """把角度归一化到 [-π, π)。"""
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
-WEAPON_SPEED = {-1: 18.0, 0: 180.0, 1: 18.0, 2: 32.0, 3: 18.0, 4: 0.0, 5: 27.0}
+WEAPON_SPEED = {-1: 18.0, 0: 180.0, 1: 18.0, 2: 32.0, 3: 18.0,
+                4: 0.0, 5: 27.0, 6: 18.0}
 
 MAX_PATH_BOUNCES = 100
 # 反弹后路径离自己多近算"自伤风险"（米）。实测预测偏差可达 16m，取 4m 保守。
