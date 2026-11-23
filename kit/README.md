@@ -98,6 +98,7 @@ asyncio.run(main())
 | `ammo(pid)` | **v7**：`{'left','fired','remaining','weapon','type'}`；`left` 是弹匣容量、`fired` 是本回合已发射数、**真正剩余 = `remaining`**；多武器时按当前武器类型匹配条目；Frag Bomb 是一发制，弹链字段可能为 None |
 | `scores()` / `kills_of(pid)` | **v6：比分/击杀（开火后归因最可靠）** |
 | `bullets_in_flight(pid=None)` | 场上弹丸（可按发射者过滤）；**type=6 母弹、type=7 为 30 个 Frag Bomb 破片**，不能当普通子弹扫描 |
+| `frag_bomb_detonations(reset=False)` | 最近 Frag Bomb 爆炸事件 `{id,x,y,t,source}`；在线消息/显式调用给精确位置，本地瞬时引爆用母弹消失/破片质心兜底 |
 | `terrain()` / `open_tiles()` / `plan_path(a,b)` / `maze_distance(a,b)` | 地形/寻路 |
 | `wait_target_gone(target_id, timeout=8)` | 等待目标离场（回合切换也会 True，需搭配比分判断） |
 | `reset_maze_cache()` | 清空行为层墙缓存（每回合迷宫重生成，跨回合要清） |

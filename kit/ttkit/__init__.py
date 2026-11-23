@@ -490,12 +490,105 @@ class Kit:
           for (const id in ps) { const p = ps[id];
             out.push({id: id, playerId: p.getPlayerId ? p.getPlayerId() : null,
               type: p.getType ? p.getType() : null,
+              typeName: ({'-1':'BULLET','0':'LASER','1':'DOUBLE_BARREL','2':'SHOTGUN',
+                         '3':'HOMING_MISSILE','4':'MINE_SHRAPNEL','5':'GATLING_GUN',
+                         '6':'FRAG_BOMB','7':'FRAG_BOMB_SHRAPNEL'})[String(p.getType ? p.getType() : -1)] || null,
               x: p.getX(), y: p.getY(), vx: p.getSpeedX ? p.getSpeedX() : null,
               vy: p.getSpeedY ? p.getSpeedY() : null,
-              timeAlive: p.timeAlive, deadlyToOwner: !!p.deadlyToOwner}); }
+              timeAlive: p.timeAlive, triggered: p.isTriggered ? p.isTriggered() : null,
+              detonated: p.isDetonated ? p.isDetonated() : null,
+              deadlyToOwner: p.isDeadlyToOwner ? p.isDeadlyToOwner() : !!p.deadlyToOwner}); }
           return JSON.stringify(out); })()"""
         try:
             return json.loads(await self.ctl.cdp.eval(js))
+        except Exception:
+            return []
+
+    async def frag_bomb_detonations(self, reset=False):
+        """最近 Frag Bomb 爆炸事件（2026-11-19 新武器）。
+
+        返回 ``[{id,x,y,t,source}]``；``t`` 为页面 ``performance.now()`` 毫秒。
+        source:
+          - ``detonateFragBomb``：在线消息/显式调用（位置精确）；
+          - ``disappear``：本地模式母弹消失且此前见过 type=6；
+          - ``shrapnel_burst``：本地瞬时引爆时没见过母弹，用新 type=7 破片质心兜底。
+
+        这是**接口层观测**：安装轻量 hook/50ms tracker，不修改游戏规则；换页面后自动重建。
+        """
+        js = """(() => {
+          try {
+            const gc = GameManager.getGameController();
+            if (!gc) return '[]';
+            let tr = window.__ttFragTrack;
+            if (!tr) {
+              tr = {events: [], seen: {}, shrapSeen: {}, detonated: {},
+                    gc: null, hooked: false, lastBurst: 0, update: null, timer: null};
+              window.__ttFragTrack = tr;
+            }
+            if (tr.gc !== gc) { tr.gc = gc; tr.hooked = false; tr.seen = {}; }
+            if (!tr.update) {
+              tr.update = function () {
+                try {
+                  const g = GameManager.getGameController();
+                  if (!g) return;
+                  const ps = (g.getProjectiles ? g.getProjectiles() : {}) || {};
+                  const curFrag = {}, curShrap = {};
+                  for (const id in ps) {
+                    const p = ps[id];
+                    const typ = p.getType ? p.getType() : null;
+                    if (typ === 6) curFrag[id] = {x: p.getX(), y: p.getY()};
+                    else if (typ === 7) curShrap[id] = {x: p.getX(), y: p.getY()};
+                  }
+                  for (const id in tr.seen) {
+                    if (!curFrag[id] && !tr.detonated[id]) {
+                      tr.events.push({id: id, x: tr.seen[id].x, y: tr.seen[id].y,
+                                      t: performance.now(), source: 'disappear'});
+                    }
+                  }
+                  tr.seen = curFrag;
+                  let newShrap = false;
+                  for (const id in curShrap) if (!tr.shrapSeen[id]) newShrap = true;
+                  tr.shrapSeen = curShrap;
+                  const now = performance.now();
+                  if (newShrap && now - tr.lastBurst > 800) {
+                    let sx = 0, sy = 0, n = 0;
+                    for (const id in curShrap) { sx += curShrap[id].x; sy += curShrap[id].y; n++; }
+                    if (n > 0) {
+                      tr.events.push({id: 'burst', x: sx / n, y: sy / n,
+                                      t: now, source: 'shrapnel_burst'});
+                      tr.lastBurst = now;
+                    }
+                  }
+                  if (tr.events.length > 200) tr.events = tr.events.slice(-200);
+                } catch (e) {}
+              };
+              tr.timer = setInterval(tr.update, 50);
+            }
+            if (!tr.hooked) {
+              try {
+                const orig = gc.detonateFragBomb;
+                if (typeof orig === 'function' && !orig.__ttWrapped) {
+                  const wrapped = function (id, x, y) {
+                    tr.events.push({id: id, x: x, y: y, t: performance.now(), source: 'detonateFragBomb'});
+                    tr.detonated[id] = performance.now();
+                    if (tr.events.length > 200) tr.events = tr.events.slice(-200);
+                    return orig.call(this, id, x, y);
+                  };
+                  wrapped.__ttWrapped = true;
+                  gc.detonateFragBomb = wrapped;
+                }
+              } catch (e) {}
+              tr.hooked = true;
+            }
+            tr.update();
+            const out = tr.events.slice();
+            if (%(reset)s) tr.events = [];
+            return JSON.stringify(out);
+          } catch (e) { return '[]'; }
+        })()""" % {"reset": "true" if reset else "false"}
+        try:
+            raw = await self.ctl.cdp.eval(js)
+            return json.loads(raw) if isinstance(raw, str) else (raw or [])
         except Exception:
             return []
 

@@ -290,6 +290,61 @@ STATE_JS = r"""
         owner:owner, timeAlive:timeAlive, deadlyToOwner:deadly,
         lifetime:lifetime, maxLifetime:maxLife});
     }
+    // Frag Bomb 爆炸事件：在线 detonateFragBomb 精确定位；本地直接 detonate
+    // 用母弹最后位置兜底（type=6 -> 消失）。
+    try {
+      let tr = window.__ttFragTrack;
+      if (!tr) { tr = {events: [], seen: {}, shrapSeen: {}, detonated: {},
+                       gc: null, hooked: false, lastBurst: 0}; window.__ttFragTrack = tr; }
+      if (tr.gc !== gc) { tr.gc = gc; tr.hooked = false; tr.seen = {}; }
+      if (!tr.hooked) {
+        try {
+          const orig = gc.detonateFragBomb;
+          if (typeof orig === 'function' && !orig.__ttWrapped) {
+            const wrapped = function (id, x, y) {
+              tr.events.push({id:id, x:x, y:y, t:performance.now(), source:'detonateFragBomb'});
+              tr.detonated[id] = performance.now();
+              if (tr.events.length > 200) tr.events = tr.events.slice(-200);
+              return orig.call(this, id, x, y);
+            };
+            wrapped.__ttWrapped = true;
+            gc.detonateFragBomb = wrapped;
+          }
+        } catch (e) {}
+        tr.hooked = true;
+      }
+      const cur = {};
+      const curShrap = {};
+      for (const id in raw) {
+        const p = raw[id];
+        try {
+          const typ = p.getType ? p.getType() : null;
+          if (typ === 6) cur[id] = {x:p.getX?p.getX():0, y:p.getY?p.getY():0};
+          else if (typ === 7) curShrap[id] = {x:p.getX?p.getX():0, y:p.getY?p.getY():0};
+        } catch(e) {}
+      }
+      for (const id in tr.seen) {
+        if (!cur[id] && !tr.detonated[id]) {
+          tr.events.push({id:id, x:tr.seen[id].x, y:tr.seen[id].y,
+                          t:performance.now(), source:'disappear'});
+        }
+      }
+      tr.seen = cur;
+      let newShrap = false;
+      for (const id in curShrap) if (!tr.shrapSeen[id]) newShrap = true;
+      tr.shrapSeen = curShrap;
+      const nowMs = performance.now();
+      if (newShrap && nowMs - (tr.lastBurst || 0) > 800) {
+        let sx = 0, sy = 0, n = 0;
+        for (const id in curShrap) { sx += curShrap[id].x; sy += curShrap[id].y; n++; }
+        if (n > 0) {
+          tr.events.push({id:'burst', x:sx/n, y:sy/n, t:nowMs, source:'shrapnel_burst'});
+          tr.lastBurst = nowMs;
+        }
+      }
+      if (tr.events.length > 200) tr.events = tr.events.slice(-200);
+      out.fragBombDetonations = tr.events.slice(-30);
+    } catch (e) { out.fragBombDetonations = []; }
   } catch(e){}
 
   // collectibles
