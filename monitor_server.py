@@ -311,7 +311,8 @@ STATE_JS = r"""
         tr.detonated = {}; tr.lastBurst = 0;
       }
       if (tr.gc !== gc) { tr.gc = gc; tr.hooked = false; tr.seen = {}; }
-      const rstate = (gc.getRoundState ? gc.getRoundState() : null);
+      const rstate = (gc.getState ? gc.getState()
+                      : (gc.model && gc.model.getState ? gc.model.getState() : null));
       if (rstate && rstate !== 'in round') {
         tr.seen = {}; tr.shrapSeen = {};
         out.fragBombDetonations = tr.events.slice(-30);

@@ -556,7 +556,8 @@ class Kit:
                     tr.detonated = {}; tr.lastBurst = 0;
                     return;
                   }
-                  const state = (g.getRoundState ? g.getRoundState() : null);
+                  const state = (g.getState ? g.getState()
+                                 : (g.model && g.model.getState ? g.model.getState() : null));
                   if (state && state !== 'in round') {
                     // 回合间/结束时不把“项目清空”误判成爆炸
                     tr.seen = {}; tr.shrapSeen = {}; return;
