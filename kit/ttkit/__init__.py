@@ -150,6 +150,12 @@ class Kit:
         self.bhv = TankBehavior(port=self.port)
         await self.bhv.connect()
         self._roles_ts = 0.0
+        # 尽量在连接后安装 Frag 事件 tracker；对局控制器尚未出现时这次是 no-op，
+        # 进入对局后首次调用 frag_bomb_detonations() 会再安装。
+        try:
+            await self.frag_bomb_detonations()
+        except Exception:
+            pass
         return self
 
     async def close(self):
@@ -497,6 +503,7 @@ class Kit:
               vy: p.getSpeedY ? p.getSpeedY() : null,
               timeAlive: p.timeAlive, triggered: p.isTriggered ? p.isTriggered() : null,
               detonated: p.isDetonated ? p.isDetonated() : null,
+              detonationTime: (p.detonationTime !== undefined ? p.detonationTime : null),
               deadlyToOwner: p.isDeadlyToOwner ? p.isDeadlyToOwner() : !!p.deadlyToOwner}); }
           return JSON.stringify(out); })()"""
         try:
@@ -507,13 +514,17 @@ class Kit:
     async def frag_bomb_detonations(self, reset=False):
         """最近 Frag Bomb 爆炸事件（2026-11-19 新武器）。
 
-        返回 ``[{id,x,y,t,source}]``；``t`` 为页面 ``performance.now()`` 毫秒。
+        返回 ``[{id,x,y,t,roundId,source}]``；``t`` 为页面 ``performance.now()`` 毫秒。
         source:
           - ``detonateFragBomb``：在线消息/显式调用（位置精确）；
           - ``disappear``：本地模式母弹消失且此前见过 type=6；
-          - ``shrapnel_burst``：本地瞬时引爆时没见过母弹，用新 type=7 破片质心兜底。
+          - ``shrapnel_burst``：本地瞬时引爆时没见过母弹，用新 type=7 破片质心兜底
+            （``approximate=True``；两个极近的爆炸可能合并）。
 
+        事件按 ``roundId`` 隔离：换回合自动清空旧事件。默认是**快照**语义
+        （``reset=False`` 会重复返回同一批事件）；增量消费请用 ``reset=True``。
         这是**接口层观测**：安装轻量 hook/50ms tracker，不修改游戏规则；换页面后自动重建。
+        建议进对局后、开火前先调用一次以安装 tracker。
         """
         js = """(() => {
           try {
@@ -522,8 +533,15 @@ class Kit:
             let tr = window.__ttFragTrack;
             if (!tr) {
               tr = {events: [], seen: {}, shrapSeen: {}, detonated: {},
-                    gc: null, hooked: false, lastBurst: 0, update: null, timer: null};
+                    gc: null, hooked: false, lastBurst: 0, roundId: null,
+                    update: null, timer: null};
               window.__ttFragTrack = tr;
+            }
+            const rid = (gc.getRoundId ? gc.getRoundId() : null);
+            if (tr.roundId !== rid) {
+              tr.roundId = rid;
+              tr.events = []; tr.seen = {}; tr.shrapSeen = {};
+              tr.detonated = {}; tr.lastBurst = 0;
             }
             if (tr.gc !== gc) { tr.gc = gc; tr.hooked = false; tr.seen = {}; }
             if (!tr.update) {
@@ -531,6 +549,18 @@ class Kit:
                 try {
                   const g = GameManager.getGameController();
                   if (!g) return;
+                  const rid2 = (g.getRoundId ? g.getRoundId() : null);
+                  if (tr.roundId !== rid2) {
+                    tr.roundId = rid2;
+                    tr.events = []; tr.seen = {}; tr.shrapSeen = {};
+                    tr.detonated = {}; tr.lastBurst = 0;
+                    return;
+                  }
+                  const state = (g.getRoundState ? g.getRoundState() : null);
+                  if (state && state !== 'in round') {
+                    // 回合间/结束时不把“项目清空”误判成爆炸
+                    tr.seen = {}; tr.shrapSeen = {}; return;
+                  }
                   const ps = (g.getProjectiles ? g.getProjectiles() : {}) || {};
                   const curFrag = {}, curShrap = {};
                   for (const id in ps) {
@@ -539,23 +569,24 @@ class Kit:
                     if (typ === 6) curFrag[id] = {x: p.getX(), y: p.getY()};
                     else if (typ === 7) curShrap[id] = {x: p.getX(), y: p.getY()};
                   }
+                  const now = performance.now();
                   for (const id in tr.seen) {
                     if (!curFrag[id] && !tr.detonated[id]) {
                       tr.events.push({id: id, x: tr.seen[id].x, y: tr.seen[id].y,
-                                      t: performance.now(), source: 'disappear'});
+                                      t: now, roundId: tr.roundId, source: 'disappear'});
                     }
                   }
                   tr.seen = curFrag;
-                  let newShrap = false;
-                  for (const id in curShrap) if (!tr.shrapSeen[id]) newShrap = true;
+                  let newShrap = 0;
+                  for (const id in curShrap) if (!tr.shrapSeen[id]) newShrap++;
                   tr.shrapSeen = curShrap;
-                  const now = performance.now();
-                  if (newShrap && now - tr.lastBurst > 800) {
+                  if (newShrap > 0 && now - tr.lastBurst > 80) {
                     let sx = 0, sy = 0, n = 0;
                     for (const id in curShrap) { sx += curShrap[id].x; sy += curShrap[id].y; n++; }
                     if (n > 0) {
-                      tr.events.push({id: 'burst', x: sx / n, y: sy / n,
-                                      t: now, source: 'shrapnel_burst'});
+                      tr.events.push({id: 'burst-' + Math.round(now), x: sx / n, y: sy / n,
+                                      t: now, roundId: tr.roundId,
+                                      source: 'shrapnel_burst', approximate: true});
                       tr.lastBurst = now;
                     }
                   }
@@ -567,23 +598,26 @@ class Kit:
             if (!tr.hooked) {
               try {
                 const orig = gc.detonateFragBomb;
-                if (typeof orig === 'function' && !orig.__ttWrapped) {
-                  const wrapped = function (id, x, y) {
-                    tr.events.push({id: id, x: x, y: y, t: performance.now(), source: 'detonateFragBomb'});
-                    tr.detonated[id] = performance.now();
-                    if (tr.events.length > 200) tr.events = tr.events.slice(-200);
-                    return orig.call(this, id, x, y);
-                  };
-                  wrapped.__ttWrapped = true;
-                  gc.detonateFragBomb = wrapped;
+                if (typeof orig === 'function') {
+                  if (!orig.__ttWrapped) {
+                    const wrapped = function (id, x, y) {
+                      tr.events.push({id: id, x: x, y: y, t: performance.now(),
+                                      roundId: tr.roundId, source: 'detonateFragBomb'});
+                      tr.detonated[id] = performance.now();
+                      if (tr.events.length > 200) tr.events = tr.events.slice(-200);
+                      return orig.call(this, id, x, y);
+                    };
+                    wrapped.__ttWrapped = true;
+                    gc.detonateFragBomb = wrapped;
+                  }
+                  tr.hooked = true;
                 }
               } catch (e) {}
-              tr.hooked = true;
             }
             tr.update();
-            const out = tr.events.slice();
+            const evs = tr.events.slice();
             if (%(reset)s) tr.events = [];
-            return JSON.stringify(out);
+            return JSON.stringify(evs);
           } catch (e) { return '[]'; }
         })()""" % {"reset": "true" if reset else "false"}
         try:

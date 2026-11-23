@@ -259,17 +259,26 @@ STATE_JS = r"""
     const raw = (rm && rm.getProjectiles) ? rm.getProjectiles() : (gc.getProjectiles ? gc.getProjectiles() : {});
     // max lifetime per weapon type from game Constants
     const MAXLIFE = {};
+    // 2026-11-23 修正：live `Constants` 实际是 function，常量在 `Constants.<NAME>`，
+    // 旧代码的 `C_` 别名大多为 undefined；这里两种写法兼容。
+    const C = (name) => {
+      try {
+        if (Constants[name] !== undefined) return Constants[name];
+        if (Constants['C_' + name] !== undefined) return Constants['C_' + name];
+      } catch (e) {}
+      return undefined;
+    };
     try {
-      MAXLIFE[-1] = Constants.C_BULLET_MAX_LIFETIME;
-      MAXLIFE[0] = Constants.C_LASER_MAX_LIFETIME;
-      MAXLIFE[1] = Constants.C_DOUBLE_BARREL_MAX_LIFETIME;
-      MAXLIFE[2] = Constants.C_SHOTGUN_MAX_LIFETIME;
-      MAXLIFE[3] = Constants.C_HOMING_MISSILE_MAX_LIFETIME;
-      MAXLIFE[4] = Constants.C_BULLET_MAX_LIFETIME;
-      MAXLIFE[5] = Constants.C_GATLING_GUN_MAX_LIFETIME;
-      // 2026-11-19: Frag Bomb 母弹；破片 type=7 没有独立寿命常量，
-      // 这里不硬编码，维持 fallback，避免把猜测当官方值。
-      MAXLIFE[6] = Constants.C_FRAG_BOMB_MAX_LIFETIME || 7;
+      MAXLIFE[-1] = C('BULLET_MAX_LIFETIME');
+      MAXLIFE[0] = C('LASER_MAX_LIFETIME');
+      MAXLIFE[1] = C('DOUBLE_BARREL_MAX_LIFETIME');
+      MAXLIFE[2] = C('SHOTGUN_MAX_LIFETIME');
+      MAXLIFE[3] = C('HOMING_MISSILE_MAX_LIFETIME');
+      MAXLIFE[4] = C('BULLET_MAX_LIFETIME');
+      MAXLIFE[5] = C('GATLING_GUN_MAX_LIFETIME');
+      MAXLIFE[6] = C('FRAG_BOMB_MAX_LIFETIME');
+      // type=7 Frag Bomb 破片没有独立寿命常量；输出 null，不静默猜 10s。
+      MAXLIFE[7] = null;
     } catch(e){}
     const PTYPE = {'-1':'BULLET','0':'LASER','1':'DOUBLE_BARREL','2':'SHOTGUN',
                    '3':'HOMING_MISSILE','4':'MINE_SHRAPNEL','5':'GATLING_GUN',
@@ -282,8 +291,8 @@ STATE_JS = r"""
       try { timeAlive = p.getTimeAlive ? p.getTimeAlive() : (p.timeAlive !== undefined ? p.timeAlive : -1); } catch(e){}
       try { deadly = p.isDeadlyToOwner ? p.isDeadlyToOwner() : (p.deadlyToOwner !== undefined ? p.deadlyToOwner : false); } catch(e){}
       const type = (p.getType ? p.getType() : -1);
-      const maxLife = (MAXLIFE[type] !== undefined && MAXLIFE[type] != null) ? MAXLIFE[type] : 10;
-      const lifetime = timeAlive >= 0 ? Math.max(0, maxLife - timeAlive) : maxLife;
+      const maxLife = (MAXLIFE[type] !== undefined && MAXLIFE[type] != null) ? MAXLIFE[type] : null;
+      const lifetime = (timeAlive >= 0 && maxLife != null) ? Math.max(0, maxLife - timeAlive) : null;
       out.projectiles.push({id:pid, x:p.getX?p.getX():0, y:p.getY?p.getY():0,
         vx:p.getSpeedX?p.getSpeedX():0, vy:p.getSpeedY?p.getSpeedY():0,
         type:type, typeName:(PTYPE[type]||('TYPE_'+type)),
@@ -295,23 +304,36 @@ STATE_JS = r"""
     try {
       let tr = window.__ttFragTrack;
       if (!tr) { tr = {events: [], seen: {}, shrapSeen: {}, detonated: {},
-                       gc: null, hooked: false, lastBurst: 0}; window.__ttFragTrack = tr; }
+                       gc: null, hooked: false, lastBurst: 0, roundId: null}; window.__ttFragTrack = tr; }
+      const rid = (gc.getRoundId ? gc.getRoundId() : null);
+      if (tr.roundId !== rid) {
+        tr.roundId = rid; tr.events = []; tr.seen = {}; tr.shrapSeen = {};
+        tr.detonated = {}; tr.lastBurst = 0;
+      }
       if (tr.gc !== gc) { tr.gc = gc; tr.hooked = false; tr.seen = {}; }
+      const rstate = (gc.getRoundState ? gc.getRoundState() : null);
+      if (rstate && rstate !== 'in round') {
+        tr.seen = {}; tr.shrapSeen = {};
+        out.fragBombDetonations = tr.events.slice(-30);
+      } else {
       if (!tr.hooked) {
         try {
           const orig = gc.detonateFragBomb;
-          if (typeof orig === 'function' && !orig.__ttWrapped) {
-            const wrapped = function (id, x, y) {
-              tr.events.push({id:id, x:x, y:y, t:performance.now(), source:'detonateFragBomb'});
-              tr.detonated[id] = performance.now();
-              if (tr.events.length > 200) tr.events = tr.events.slice(-200);
-              return orig.call(this, id, x, y);
-            };
-            wrapped.__ttWrapped = true;
-            gc.detonateFragBomb = wrapped;
+          if (typeof orig === 'function') {
+            if (!orig.__ttWrapped) {
+              const wrapped = function (id, x, y) {
+                tr.events.push({id:id, x:x, y:y, t:performance.now(),
+                                roundId:tr.roundId, source:'detonateFragBomb'});
+                tr.detonated[id] = performance.now();
+                if (tr.events.length > 200) tr.events = tr.events.slice(-200);
+                return orig.call(this, id, x, y);
+              };
+              wrapped.__ttWrapped = true;
+              gc.detonateFragBomb = wrapped;
+            }
+            tr.hooked = true;
           }
         } catch (e) {}
-        tr.hooked = true;
       }
       const cur = {};
       const curShrap = {};
@@ -326,24 +348,27 @@ STATE_JS = r"""
       for (const id in tr.seen) {
         if (!cur[id] && !tr.detonated[id]) {
           tr.events.push({id:id, x:tr.seen[id].x, y:tr.seen[id].y,
-                          t:performance.now(), source:'disappear'});
+                          t:performance.now(), roundId:tr.roundId, source:'disappear'});
         }
       }
       tr.seen = cur;
-      let newShrap = false;
-      for (const id in curShrap) if (!tr.shrapSeen[id]) newShrap = true;
+      let newShrap = 0;
+      for (const id in curShrap) if (!tr.shrapSeen[id]) newShrap++;
       tr.shrapSeen = curShrap;
       const nowMs = performance.now();
-      if (newShrap && nowMs - (tr.lastBurst || 0) > 800) {
+      if (newShrap > 0 && nowMs - (tr.lastBurst || 0) > 80) {
         let sx = 0, sy = 0, n = 0;
         for (const id in curShrap) { sx += curShrap[id].x; sy += curShrap[id].y; n++; }
         if (n > 0) {
-          tr.events.push({id:'burst', x:sx/n, y:sy/n, t:nowMs, source:'shrapnel_burst'});
+          tr.events.push({id:'burst-' + Math.round(nowMs), x:sx/n, y:sy/n,
+                          t:nowMs, roundId:tr.roundId, source:'shrapnel_burst',
+                          approximate:true});
           tr.lastBurst = nowMs;
         }
       }
       if (tr.events.length > 200) tr.events = tr.events.slice(-200);
       out.fragBombDetonations = tr.events.slice(-30);
+      }
     } catch (e) { out.fragBombDetonations = []; }
   } catch(e){}
 
